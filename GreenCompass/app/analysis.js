@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { View, Text, StyleSheet, ScrollView, StatusBar, Platform, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { analyzeRestaurantWebsite } from '../services/googleMapsService';
 import LoadingIndicator from '../components/LoadingIndicator';
 import MenuResults from '../components/MenuResults';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
+import Colors from '../constants/Colors';
+import Typography from '../constants/Typography';
+import Spacing from '../constants/Spacing';
+import * as Linking from 'expo-linking';
 
 export default function AnalysisScreen() {
   const { name, id } = useLocalSearchParams();
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [analysisStage, setAnalysisStage] = useState('idle');
   const [results, setResults] = useState(null);
@@ -39,14 +47,12 @@ export default function AnalysisScreen() {
 
       // Stage 1: Start website analysis
       setAnalysisStage('Getting restaurant details and website...');
-      console.log('Starting website analysis for restaurant:', name, id);
       
       // Update progress: restaurant details
       setProgress(prev => ({ ...prev, restaurantDetails: true }));
       
       // The analyzeRestaurantWebsite function handles everything
       const analysisResults = await analyzeRestaurantWebsite(id);
-      console.log('Website analysis results:', analysisResults);
       
       // Update progress based on what was actually analyzed
       setProgress({
@@ -107,11 +113,9 @@ export default function AnalysisScreen() {
         setAnalysisStage('Analysis complete - Limited vegetarian options found');
       }
 
-      console.log('Final results compiled:', finalResults);
       setResults(finalResults);
 
     } catch (error) {
-      console.error('Analysis error:', error);
       setError(error.message || 'An error occurred during analysis');
       setProgress(prev => ({ ...prev, complete: true }));
     } finally {
@@ -146,29 +150,68 @@ export default function AnalysisScreen() {
     { key: 'complete', label: 'Complete', completed: progress.complete }
   ];
 
+  // Helper to open directions in maps
+  const handleGetDirections = () => {
+    if (!results || !results.restaurantInfo) return;
+    const { latitude, longitude, name: placeName } = results.restaurantInfo;
+    if (latitude && longitude) {
+      const label = encodeURIComponent(placeName || 'Restaurant');
+      const latLng = `${latitude},${longitude}`;
+      let url = '';
+      if (Platform.OS === 'ios') {
+        url = `http://maps.apple.com/?ll=${latLng}&q=${label}`;
+      } else {
+        url = `https://www.google.com/maps/search/?api=1&query=${latLng}(${label})`;
+      }
+      Linking.openURL(url);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+      
       <View style={styles.header}>
-        <Text style={styles.title}>Menu Analysis</Text>
-        <Text style={styles.restaurantName}>{name}</Text>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <Text style={styles.backButtonText}>←</Text>
+        </TouchableOpacity>
+        <View style={styles.headerContent}>
+          <Text style={styles.title}>Menu Analysis</Text>
+          <Text style={styles.restaurantName}>{name}</Text>
+        </View>
       </View>
-
+      {/* Get Directions Button */}
+      {results && results.restaurantInfo && (
+        <View style={styles.directionsButtonContainer}>
+          <Button
+            title="Get Directions"
+            onPress={handleGetDirections}
+            variant="primary"
+            size="medium"
+            style={styles.directionsButton}
+          />
+        </View>
+      )}
       <View style={styles.content}>
         {loading && (
           <LoadingIndicator 
             message={getProgressText()}
-            progress={getProgressSteps()}
             stage={analysisStage}
           />
         )}
 
         {error && (
           <View style={styles.errorContainer}>
-            <Text style={styles.errorTitle}>Analysis Failed</Text>
-            <Text style={styles.errorMessage}>{error}</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={handleRetryAnalysis}>
-              <Text style={styles.retryButtonText}>Try Again</Text>
-            </TouchableOpacity>
+            <Card variant="outlined" style={styles.errorCard}>
+              <Text style={styles.errorTitle}>Analysis Failed</Text>
+              <Text style={styles.errorMessage}>{error}</Text>
+              <Button 
+                title="Try Again" 
+                onPress={handleRetryAnalysis}
+                variant="primary"
+                style={styles.retryButton}
+              />
+            </Card>
           </View>
         )}
 
@@ -186,59 +229,93 @@ export default function AnalysisScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Colors.background.secondary,
   },
+  
   header: {
-    backgroundColor: '#4CAF50',
-    padding: 20,
-    paddingTop: 40,
+    backgroundColor: Colors.primary[500],
+    paddingVertical: Spacing.header.paddingVertical,
+    paddingHorizontal: Spacing.header.paddingHorizontal,
+    shadowColor: Colors.shadow.medium,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 4,
+    paddingTop: Platform.select({ ios: 12, android: 24, default: 0 }),
+    flexDirection: 'row',
+    alignItems: 'center',
   },
+  
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
+    ...Typography.h3,
+    color: Colors.text.inverse,
     textAlign: 'center',
   },
+  
   restaurantName: {
-    fontSize: 18,
-    color: 'white',
+    ...Typography.body,
+    color: Colors.text.inverse,
     textAlign: 'center',
-    marginTop: 5,
+    marginTop: Spacing.xs,
     opacity: 0.9,
   },
+
+  backButton: {
+    position: 'absolute',
+    left: 12,
+    top: Platform.select({ ios: 12, android: 24, default: 0 }),
+    zIndex: 2,
+    padding: 8,
+  },
+  backButtonText: {
+    fontSize: 28,
+    color: Colors.text.inverse,
+    fontWeight: 'bold',
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  
   content: {
     flex: 1,
   },
+  
   errorContainer: {
-    margin: 20,
-    padding: 20,
-    backgroundColor: '#ffebee',
-    borderRadius: 8,
-    borderColor: '#f44336',
-    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.container.padding,
   },
+  
+  errorCard: {
+    alignItems: 'center',
+    padding: Spacing.lg,
+  },
+  
   errorTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#d32f2f',
-    marginBottom: 10,
+    ...Typography.h4,
+    color: Colors.text.primary,
+    marginBottom: Spacing.sm,
   },
+  
   errorMessage: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 15,
+    ...Typography.body,
+    color: Colors.text.secondary,
+    marginBottom: Spacing.lg,
     lineHeight: 22,
+    textAlign: 'center',
   },
+  
   retryButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
-    alignSelf: 'flex-start',
+    marginTop: Spacing.sm,
   },
-  retryButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
+  directionsButtonContainer: {
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  directionsButton: {
+    width: 180,
   },
 }); 

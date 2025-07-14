@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, Alert, SafeAreaView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Alert, TextInput, KeyboardAvoidingView, Platform, StatusBar, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
-import { getNearbyRestaurants } from '../services/googleMapsService';
+import { getNearbyRestaurants, searchRestaurantsByText } from '../services/googleMapsService';
 import RestaurantListItem from '../components/RestaurantListItem';
 import LoadingIndicator from '../components/LoadingIndicator';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
+import Colors from '../constants/Colors';
+import Typography from '../constants/Typography';
+import Spacing from '../constants/Spacing';
 
 export default function ResultsScreen() {
   const [restaurants, setRestaurants] = useState([]);
@@ -13,25 +19,28 @@ export default function ResultsScreen() {
   const [manualAddress, setManualAddress] = useState('');
   const [manualLat, setManualLat] = useState('');
   const [manualLng, setManualLng] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [userLocation, setUserLocation] = useState(null);
+  const [locationChoiceMade, setLocationChoiceMade] = useState(false);
 
   useEffect(() => {
-    loadRestaurants();
-  }, []);
+    if (locationChoiceMade && !showManualInput && restaurants.length === 0) {
+      loadRestaurants();
+    }
+  }, [locationChoiceMade, showManualInput]);
 
   const geocodeAddress = async (address) => {
     try {
-      console.log('🌍 Geocoding address:', address);
       const geocodeResult = await Location.geocodeAsync(address);
       
       if (geocodeResult.length > 0) {
         const { latitude, longitude } = geocodeResult[0];
-        console.log('✅ Geocoded successfully:', { latitude, longitude });
         return { latitude, longitude };
       } else {
         throw new Error('Address not found');
       }
     } catch (error) {
-      console.error('❌ Geocoding failed:', error);
       throw new Error('Failed to find location for this address');
     }
   };
@@ -66,30 +75,29 @@ export default function ResultsScreen() {
         throw new Error('Please enter either an address or coordinates');
       }
       
-      console.log('📍 Using manual location:', location.coords);
-      
       // Proceed with restaurant search
       const nearbyRestaurants = await getNearbyRestaurants(location.coords);
       setRestaurants(nearbyRestaurants);
       setShowManualInput(false);
+      setLocationChoiceMade(true); // <-- Only set to true after successful manual location
+      setUserLocation(location.coords);
+      setSearchResults([]); // Reset search results
       
     } catch (error) {
-      console.error('❌ Manual location error:', error);
       setError(error.message);
     } finally {
       setLoading(false);
     }
   };
 
+  // When loading restaurants, save user location for text search
   const loadRestaurants = async () => {
     try {
       setLoading(true);
       setError(null);
 
       // Request location permission
-      console.log('📍 Requesting location permission...');
       const { status } = await Location.requestForegroundPermissionsAsync();
-      console.log('📍 Permission status:', status);
       
       if (status !== 'granted') {
         setError('Location permission denied. You can manually enter your location below.');
@@ -100,7 +108,6 @@ export default function ResultsScreen() {
 
       // Check if location services are enabled
       const providerStatus = await Location.getProviderStatusAsync();
-      console.log('📍 Location services enabled:', providerStatus.locationServicesEnabled);
       
       if (!providerStatus.locationServicesEnabled) {
         setError('Location services are disabled. You can manually enter your location below.');
@@ -110,7 +117,6 @@ export default function ResultsScreen() {
       }
 
       // Get current location with timeout and better accuracy
-      console.log('📍 Getting current location...');
       let location;
       
       try {
@@ -118,9 +124,7 @@ export default function ResultsScreen() {
           accuracy: Location.Accuracy.Balanced,
           timeout: 10000, // 10 seconds timeout
         });
-        console.log('📍 Location obtained:', location.coords);
       } catch (locationError) {
-        console.warn('📍 Failed to get current location, trying last known location:', locationError);
         
         // Try to get last known location as fallback
         try {
@@ -130,15 +134,12 @@ export default function ResultsScreen() {
           });
           
           if (location) {
-            console.log('📍 Using last known location:', location.coords);
           }
         } catch (lastKnownError) {
-          console.error('📍 Failed to get last known location:', lastKnownError);
         }
         
         // If all else fails, offer manual input
         if (!location) {
-          console.log('📍 All location methods failed, offering manual input');
           setError('Unable to get your location automatically. Please enter your location manually below.');
           setShowManualInput(true);
           setLoading(false);
@@ -149,14 +150,45 @@ export default function ResultsScreen() {
       // Proceed with restaurant search
       const nearbyRestaurants = await getNearbyRestaurants(location.coords);
       setRestaurants(nearbyRestaurants);
+      setUserLocation(location.coords);
+      setSearchResults([]); // Reset search results
       
     } catch (error) {
-      console.error('❌ Error loading restaurants:', error);
       setError(`Failed to load restaurants: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  // Search logic
+  useEffect(() => {
+    const doSearch = async () => {
+      const q = search.trim().toLowerCase();
+      if (!q) {
+        setSearchResults([]);
+        return;
+      }
+      // Filter local results first
+      const filtered = restaurants.filter(r =>
+        (r.name && r.name.toLowerCase().includes(q)) ||
+        (r.vicinity && r.vicinity.toLowerCase().includes(q))
+      );
+      if (filtered.length > 0) {
+        setSearchResults(filtered);
+      } else if (userLocation) {
+        setLoading(true);
+        const remoteResults = await searchRestaurantsByText(search, userLocation);
+        setSearchResults(remoteResults);
+        setLoading(false);
+      } else {
+        setSearchResults([]);
+      }
+    };
+    doSearch();
+  }, [search]);
+
+  // Show searchResults if searching, otherwise all restaurants
+  const filteredRestaurants = search ? searchResults : restaurants;
 
   const renderRestaurant = ({ item }) => (
     <RestaurantListItem restaurant={item} />
@@ -166,93 +198,172 @@ export default function ResultsScreen() {
     <KeyboardAvoidingView 
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.manualInputContainer}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
-      <View style={styles.manualInputCard}>
-        <Text style={styles.manualInputTitle}>Enter Your Location</Text>
-        <Text style={styles.manualInputSubtitle}>
-          Enter either an address or coordinates to find nearby restaurants
-        </Text>
-        
-        <View style={styles.inputSection}>
-          <Text style={styles.inputLabel}>Address (e.g., "123 Main St, San Francisco, CA")</Text>
-          <TextInput
-            style={styles.textInput}
-            value={manualAddress}
-            onChangeText={setManualAddress}
-            placeholder="Enter your address"
-            placeholderTextColor="#999"
-          />
-        </View>
-        
-        <View style={styles.orDivider}>
-          <View style={styles.orLine} />
-          <Text style={styles.orText}>OR</Text>
-          <View style={styles.orLine} />
-        </View>
-        
-        <View style={styles.coordsSection}>
-          <Text style={styles.inputLabel}>Coordinates</Text>
-          <View style={styles.coordsRow}>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Button
+          title="← Back"
+          onPress={() => {
+            setLoading(false);
+            setError(null);
+            setManualAddress('');
+            setManualLat('');
+            setManualLng('');
+            setShowManualInput(false);
+            setLocationChoiceMade(false);
+          }}
+          variant="text"
+          style={styles.backButton}
+        />
+        <Card variant="elevated" style={styles.manualInputCard}>
+          <View style={styles.manualInputHeader}>
+            <Text style={styles.manualInputTitle}>Enter Your Location</Text>
+            <Text style={styles.manualInputSubtitle}>
+              Enter either an address or coordinates to find nearby restaurants
+            </Text>
+          </View>
+          
+          <View style={styles.inputSection}>
+            <Text style={styles.inputLabel}>Address</Text>
             <TextInput
-              style={[styles.textInput, styles.coordInput]}
-              value={manualLat}
-              onChangeText={setManualLat}
-              placeholder="Latitude"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={[styles.textInput, styles.coordInput]}
-              value={manualLng}
-              onChangeText={setManualLng}
-              placeholder="Longitude"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
+              style={styles.textInput}
+              value={manualAddress}
+              onChangeText={setManualAddress}
+              placeholder="e.g., 123 Main St, San Francisco, CA"
+              placeholderTextColor={Colors.text.muted}
             />
           </View>
-        </View>
-        
-        <View style={styles.buttonRow}>
-          <TouchableOpacity 
-            style={styles.submitButton} 
-            onPress={handleManualLocationSubmit}
-            disabled={loading}
-          >
-            <Text style={styles.submitButtonText}>
-              {loading ? 'Searching...' : 'Find Restaurants'}
-            </Text>
-          </TouchableOpacity>
           
-          <TouchableOpacity 
-            style={styles.retryButton} 
-            onPress={() => {
-              setShowManualInput(false);
-              loadRestaurants();
-            }}
-          >
-            <Text style={styles.retryButtonText}>Try Auto-Location Again</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+          <View style={styles.orDivider}>
+            <View style={styles.orLine} />
+            <Text style={styles.orText}>OR</Text>
+            <View style={styles.orLine} />
+          </View>
+          
+          <View style={styles.coordsSection}>
+            <Text style={styles.inputLabel}>Coordinates</Text>
+            <View style={styles.coordsRow}>
+              <TextInput
+                style={[styles.textInput, styles.coordInput]}
+                value={manualLat}
+                onChangeText={setManualLat}
+                placeholder="Latitude"
+                placeholderTextColor={Colors.text.muted}
+                keyboardType="numeric"
+              />
+              <TextInput
+                style={[styles.textInput, styles.coordInput]}
+                value={manualLng}
+                onChangeText={setManualLng}
+                placeholder="Longitude"
+                placeholderTextColor={Colors.text.muted}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+          
+          <View style={styles.buttonRow}>
+            <Button
+              title={loading ? 'Searching...' : 'Find Restaurants'}
+              onPress={handleManualLocationSubmit}
+              disabled={loading}
+              variant="primary"
+              style={styles.submitButton}
+            />
+            
+            <Button
+              title="Try Auto-Location Again"
+              onPress={() => {
+                setLoading(false);
+                setError(null);
+                setManualAddress('');
+                setManualLat('');
+                setManualLng('');
+                setShowManualInput(false);
+                loadRestaurants();
+              }}
+              variant="outline"
+              style={styles.retryButton}
+            />
+          </View>
+        </Card>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
+
+  if (!locationChoiceMade && !showManualInput) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+        <View style={styles.locationChoiceContainer}>
+          <Card variant="elevated" style={styles.locationChoiceCard}>
+            <Text style={styles.locationChoiceTitle}>How would you like to search?</Text>
+            <Button
+              title="Use My Current Location"
+              onPress={() => {
+                setLocationChoiceMade(true);
+                setShowManualInput(false);
+              }}
+              variant="primary"
+              style={styles.locationChoiceButton}
+            />
+            <Button
+              title="Enter Location Manually"
+              onPress={() => {
+                setLoading(false);
+                setError(null);
+                setManualAddress('');
+                setManualLat('');
+                setManualLng('');
+                setShowManualInput(true);
+                // Do NOT setLocationChoiceMade(true) here
+              }}
+              variant="outline"
+              style={styles.locationChoiceButton}
+            />
+          </Card>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (loading && !showManualInput) {
     return (
       <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
         <LoadingIndicator message="Finding nearby restaurants..." />
       </SafeAreaView>
     );
   }
 
-  if (error && showManualInput) {
+  if (loading && showManualInput) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorTitle}>Location Required</Text>
-          <Text style={styles.errorMessage}>{error}</Text>
-        </View>
-        {renderManualLocationInput()}
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+        <LoadingIndicator message="Searching for restaurants..." />
+      </SafeAreaView>
+    );
+  }
+
+  if (error && showManualInput && locationChoiceMade) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+        <ScrollView contentContainerStyle={styles.topScrollContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.errorCardWrapper}>
+            <Card variant="outlined" style={styles.errorCard}>
+              <Text style={styles.errorTitle}>Location Required</Text>
+              <Text style={styles.errorMessage}>{error}</Text>
+            </Card>
+          </View>
+          <View style={styles.manualCardWrapper}>
+            {renderManualLocationInput()}
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -260,192 +371,298 @@ export default function ResultsScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
         <View style={styles.errorContainer}>
-          <Text style={styles.errorTitle}>Oops!</Text>
-          <Text style={styles.errorMessage}>{error}</Text>
-          <TouchableOpacity 
-            style={styles.manualLocationButton} 
-            onPress={() => setShowManualInput(true)}
-          >
-            <Text style={styles.manualLocationButtonText}>Enter Location Manually</Text>
-          </TouchableOpacity>
+          <Card variant="outlined" style={styles.errorCard}>
+            <Text style={styles.errorTitle}>Oops!</Text>
+            <Text style={styles.errorMessage}>{error}</Text>
+            <Button
+              title="Enter Location Manually"
+              onPress={() => setShowManualInput(true)}
+              variant="primary"
+              style={styles.manualLocationButton}
+            />
+          </Card>
         </View>
       </SafeAreaView>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Nearby Restaurants</Text>
-        <Text style={styles.subtitle}>
-          {restaurants.length} restaurants found
-        </Text>
-      </View>
-
-      <FlatList
-        data={restaurants}
-        renderItem={renderRestaurant}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-      />
-    </SafeAreaView>
-  );
+  if (showManualInput) {
+    return renderManualLocationInput();
+  }
+  // Only show the results page if locationChoiceMade is true and showManualInput is false
+  if (locationChoiceMade && !showManualInput) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+        <View style={styles.header}>
+          <Button
+            title="←"
+            onPress={() => {
+              setLocationChoiceMade(false);
+              setShowManualInput(false);
+            }}
+            variant="text"
+            style={styles.headerBackButton}
+          />
+          <View style={styles.headerContent}>
+            <Text style={styles.title}>Nearby Restaurants</Text>
+            <Text style={styles.subtitle}>
+              {restaurants.length} restaurants found
+            </Text>
+          </View>
+        </View>
+        <View style={styles.searchBarContainer}>
+          <TextInput
+            style={styles.searchBar}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search by name or address..."
+            placeholderTextColor={Colors.text.muted}
+            returnKeyType="search"
+          />
+        </View>
+        <FlatList
+          data={filteredRestaurants}
+          renderItem={renderRestaurant}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      </SafeAreaView>
+    );
+  }
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Colors.background.secondary,
   },
+  
   header: {
-    backgroundColor: '#4CAF50',
-    padding: 20,
-    paddingTop: 40,
+    backgroundColor: Colors.primary[500],
+    paddingVertical: Spacing.header.paddingVertical,
+    paddingHorizontal: Spacing.header.paddingHorizontal,
+    shadowColor: Colors.shadow.medium,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 4,
+    paddingTop: Platform.select({ ios: 12, android: 24, default: 0 }),
+    flexDirection: 'row',
+    alignItems: 'center',
   },
+  
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
+    ...Typography.h3,
+    color: Colors.text.inverse,
     textAlign: 'center',
   },
+  
   subtitle: {
-    fontSize: 16,
-    color: 'white',
+    ...Typography.body,
+    color: Colors.text.inverse,
     textAlign: 'center',
-    marginTop: 5,
+    marginTop: Spacing.xs,
     opacity: 0.9,
   },
+  
   listContainer: {
-    padding: 10,
+    padding: Spacing.list.containerPadding,
   },
+  
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: Spacing.container.padding,
   },
+  
+  errorCard: {
+    alignItems: 'center',
+    padding: Spacing.lg,
+  },
+  
   errorTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 10,
+    ...Typography.h4,
+    color: Colors.text.primary,
+    marginBottom: Spacing.sm,
   },
+  
   errorMessage: {
-    fontSize: 16,
-    color: '#666',
+    ...Typography.body,
+    color: Colors.text.secondary,
     textAlign: 'center',
     lineHeight: 24,
-    marginBottom: 20,
+    marginBottom: Spacing.lg,
   },
+  
   manualLocationButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginTop: 10,
+    marginTop: Spacing.sm,
   },
-  manualLocationButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  
   manualInputContainer: {
-    flex: 1,
+    // Removed flex: 1 and justifyContent: 'center'
+    paddingHorizontal: Spacing.container.padding,
+    paddingVertical: Spacing.sm,
+  },
+  
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 20,
+    paddingVertical: Spacing.sm,
   },
+  
   manualInputCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    padding: Spacing.md,
+    marginTop: Spacing.md, // Add margin to separate from error card
   },
+  
+  manualInputHeader: {
+    marginBottom: Spacing.md,
+  },
+  
   manualInputTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
+    ...Typography.h4,
+    color: Colors.text.primary,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: Spacing.xs,
   },
+  
   manualInputSubtitle: {
-    fontSize: 16,
-    color: '#666',
+    ...Typography.body,
+    color: Colors.text.secondary,
     textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 22,
+    lineHeight: 20,
   },
+  
   inputSection: {
-    marginBottom: 20,
+    marginBottom: Spacing.md,
   },
+  
   inputLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
+    ...Typography.h6,
+    color: Colors.text.primary,
+    marginBottom: Spacing.xs,
   },
+  
   textInput: {
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Colors.border.medium,
     borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
+    padding: Spacing.input.paddingVertical,
+    paddingHorizontal: Spacing.input.paddingHorizontal,
+    fontSize: Typography.body.fontSize,
+    backgroundColor: Colors.background.primary,
+    color: Colors.text.primary,
   },
+  
   orDivider: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 20,
+    marginVertical: Spacing.md,
   },
+  
   orLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#ddd',
+    backgroundColor: Colors.border.medium,
   },
+  
   orText: {
-    marginHorizontal: 15,
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '600',
+    marginHorizontal: Spacing.md,
+    fontSize: Typography.bodySmall.fontSize,
+    color: Colors.text.tertiary,
+    fontWeight: Typography.fontWeight.semibold,
   },
+  
   coordsSection: {
-    marginBottom: 20,
+    marginBottom: Spacing.md,
   },
+  
   coordsRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: Spacing.sm,
   },
+  
   coordInput: {
     flex: 1,
   },
+  
   buttonRow: {
-    gap: 10,
+    gap: Spacing.xs,
   },
+  
   submitButton: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 15,
-    borderRadius: 8,
-    alignItems: 'center',
+    marginBottom: Spacing.xs,
   },
-  submitButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  
   retryButton: {
-    backgroundColor: '#f0f0f0',
-    paddingVertical: 12,
+    // Styles handled by Button component
+  },
+  searchBarContainer: {
+    paddingHorizontal: Spacing.container.padding,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+    backgroundColor: Colors.background.secondary,
+  },
+  searchBar: {
+    backgroundColor: Colors.background.primary,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border.medium,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    fontSize: Typography.body.fontSize,
+    color: Colors.text.primary,
+  },
+  errorCardWrapper: {
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
+    paddingHorizontal: Spacing.container.padding,
+  },
+  manualCardWrapper: {
+    paddingHorizontal: Spacing.container.padding,
+  },
+  topScrollContent: {
+    paddingBottom: Spacing.lg,
+  },
+  locationChoiceContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.container.padding,
+  },
+  locationChoiceCard: {
+    padding: Spacing.lg,
+    width: '100%',
+    maxWidth: 400,
     alignItems: 'center',
   },
-  retryButtonText: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '600',
+  locationChoiceTitle: {
+    ...Typography.h4,
+    color: Colors.text.primary,
+    textAlign: 'center',
+    marginBottom: Spacing.lg,
+  },
+  locationChoiceButton: {
+    width: '100%',
+    marginBottom: Spacing.md,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    marginBottom: Spacing.sm,
+  },
+  headerBackButton: {
+    marginRight: Spacing.md,
+    marginLeft: -8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
   },
 }); 

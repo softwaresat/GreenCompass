@@ -8,14 +8,12 @@ import { Platform } from 'react-native';
  */
 export const scrapeRestaurantMenu = async (websiteUrl) => {
   try {
-    console.log(`🌐 Starting smart menu scraping for: ${websiteUrl}`);
     
     // Normalize URL
     const normalizedUrl = normalizeUrl(websiteUrl);
     
     // Step 1: Find menu page URL
     const menuPageUrl = await findMenuPage(normalizedUrl);
-    console.log(`📄 Menu page found: ${menuPageUrl}`);
     
     // Step 2: Scrape the menu page
     const menuData = await scrapeMenuPage(menuPageUrl);
@@ -23,7 +21,6 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
     return menuData;
     
   } catch (error) {
-    console.error('🚨 Error scraping restaurant menu:', error);
     return {
       success: false,
       error: error.message,
@@ -40,7 +37,6 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
  */
 const findMenuPage = async (homepageUrl) => {
   try {
-    console.log('🔍 Looking for menu page...');
     
     // Universal menu page patterns (focus on common terms + structure)
     const commonMenuPaths = [
@@ -57,16 +53,13 @@ const findMenuPage = async (homepageUrl) => {
     // Try each common menu path
     for (const path of commonMenuPaths) {
       const menuUrl = new URL(path, baseUrl).href;
-      console.log(`🔗 Testing menu URL: ${menuUrl}`);
       
       if (await isValidMenuPage(menuUrl)) {
-        console.log(`✅ Found valid menu page: ${menuUrl}`);
         return menuUrl;
       }
     }
     
     // If no common paths work, scrape homepage to find menu links
-    console.log('🔍 Scraping homepage to find menu links...');
     const homepageContent = await fetchPageContent(homepageUrl);
     
     if (homepageContent) {
@@ -74,20 +67,16 @@ const findMenuPage = async (homepageUrl) => {
       
       // Test each found link
       for (const link of menuLinks) {
-        console.log(`🔗 Testing found menu link: ${link}`);
         if (await isValidMenuPage(link)) {
-          console.log(`✅ Found valid menu page from homepage: ${link}`);
           return link;
         }
       }
     }
     
     // Fall back to homepage
-    console.log('📄 No menu page found, using homepage');
     return homepageUrl;
     
   } catch (error) {
-    console.error('❌ Error finding menu page:', error);
     return homepageUrl; // Fall back to homepage
   }
 };
@@ -116,7 +105,6 @@ const analyzePageStructureWithAI = async (textContent) => {
     return patternMatches >= 3;
     
   } catch (error) {
-    console.error('❌ Error in AI page analysis:', error);
     return false;
   }
 };
@@ -151,12 +139,10 @@ const isValidMenuPage = async (url) => {
     
     // Must have either price indicators OR AI confirmation to be considered a menu page
     const isMenuPage = priceIndicatorCount >= 2 || hasMenuStructure;
-    console.log(`📊 Price indicators: ${priceIndicatorCount}, AI structure analysis: ${hasMenuStructure}, is menu page: ${isMenuPage}`);
     
     return isMenuPage;
     
   } catch (error) {
-    console.error(`❌ Error checking menu page ${url}:`, error);
     return false;
   }
 };
@@ -199,7 +185,6 @@ const extractMenuLinks = (htmlContent, baseUrl) => {
     }
   }
   
-  console.log(`🔗 Found ${menuLinks.length} potential menu links`);
   return menuLinks;
 };
 
@@ -210,7 +195,6 @@ const extractMenuLinks = (htmlContent, baseUrl) => {
  */
 const scrapeMenuPage = async (url) => {
   try {
-    console.log(`🍽️ Scraping menu from: ${url}`);
     
     const htmlContent = await fetchPageContent(url);
     if (!htmlContent) {
@@ -220,7 +204,6 @@ const scrapeMenuPage = async (url) => {
     return parseMenuFromHtml(htmlContent, url);
     
   } catch (error) {
-    console.error('❌ Error scraping menu page:', error);
     return {
       success: false,
       error: error.message,
@@ -259,7 +242,6 @@ const fetchPageContent = async (url) => {
       return response.data || null;
     }
   } catch (error) {
-    console.error(`❌ Error fetching ${url}:`, error);
     return null;
   }
 };
@@ -289,8 +271,6 @@ const normalizeUrl = (url) => {
  */
 const parseMenuFromHtml = (htmlContent, url) => {
   try {
-    console.log('🔍 Parsing menu from HTML content...');
-    console.log(`📄 HTML content length: ${htmlContent.length} characters`);
     
     // Convert HTML to text and extract menu-like content
     const textContent = htmlToText(htmlContent);
@@ -314,8 +294,6 @@ const parseMenuFromHtml = (htmlContent, url) => {
     const uniqueItems = removeDuplicateItems(menuItems);
     const cleanedItems = uniqueItems.map(item => cleanMenuItem(item));
     
-    console.log(`✅ Extracted ${cleanedItems.length} menu items from website`);
-    
     return {
       success: true,
       menuItems: cleanedItems,
@@ -325,7 +303,6 @@ const parseMenuFromHtml = (htmlContent, url) => {
     };
     
   } catch (error) {
-    console.error('❌ Error parsing menu from HTML:', error);
     return {
       success: false,
       error: 'Failed to parse menu from HTML',

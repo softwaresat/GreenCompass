@@ -20,10 +20,6 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       throw new Error('Gemini API key not configured');
     }
 
-    console.log('🤖 Gemini API: Starting vegetarian analysis of scraped menu...');
-    console.log(`🏪 Gemini API: Restaurant: ${restaurantName}`);
-    console.log(`📝 Gemini API: Analyzing ${menuItems.length} menu items`);
-
     if (!menuItems || menuItems.length === 0) {
       return {
         vegetarianItems: [],
@@ -37,17 +33,14 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
     // Create a focused prompt for vegetarian analysis of scraped menu
     const prompt = createScrapedMenuAnalysisPrompt(menuItems, restaurantName);
     
-    console.log('🤖 Gemini API: Calling API for scraped menu analysis...');
     const analysisResult = await callGeminiAPI(prompt, apiKey);
     
     if (analysisResult.success) {
-      console.log('✅ Gemini API: Scraped menu analysis completed successfully');
       return parseScrapedMenuAnalysis(analysisResult.content, menuItems);
     } else {
       throw new Error(`Gemini API error: ${analysisResult.error}`);
     }
   } catch (error) {
-    console.error('🚨 Error in scraped menu analysis:', error);
     throw error;
   }
 };
@@ -60,13 +53,12 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
  */
 const callGeminiAPI = async (prompt, apiKey) => {
   try {
-    console.log('🤖 Attempting Gemini API call...');
     
-    // Try gemini-2.5-flash first (as requested)
+    // Try gemini-2.5-flash-lite first (fastest and most cost-effective)
     let response;
     try {
       response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
         {
           contents: [{
             parts: [{
@@ -81,12 +73,35 @@ const callGeminiAPI = async (prompt, apiKey) => {
           timeout: 30000, // 30 second timeout
         }
       );
-      console.log('✅ Gemini 2.5 Flash API call successful');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.info('[Gemini] Model used: gemini-2.5-flash-lite');
+      }
     } catch (primaryError) {
-      console.log('⚠️ Gemini 2.5 Flash failed, trying 1.5 Flash...', primaryError.message);
       
       try {
-        // Fallback to gemini-1.5-flash
+        // Fallback to gemini-2.5-flash
+        response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          {
+            contents: [{
+              parts: [{
+                text: prompt
+              }]
+            }]
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            timeout: 30000,
+          }
+        );
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.info('[Gemini] Model used: gemini-2.5-flash');
+        }
+      } catch (secondaryError) {
+        
+        // Final fallback to gemini-1.5-flash
         response = await axios.post(
           `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
           {
@@ -103,28 +118,9 @@ const callGeminiAPI = async (prompt, apiKey) => {
             timeout: 30000,
           }
         );
-        console.log('✅ Gemini 1.5 Flash API call successful');
-      } catch (secondaryError) {
-        console.log('⚠️ Gemini 1.5 Flash failed, trying 1.5 Pro...', secondaryError.message);
-        
-        // Final fallback to gemini-1.5-pro
-        response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
-          {
-            contents: [{
-              parts: [{
-                text: prompt
-              }]
-            }]
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            timeout: 30000,
-          }
-        );
-        console.log('✅ Gemini 1.5 Pro API call successful');
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.info('[Gemini] Model used: gemini-1.5-flash');
+        }
       }
     }
 
@@ -137,7 +133,6 @@ const callGeminiAPI = async (prompt, apiKey) => {
       throw new Error('Invalid response format from Gemini API');
     }
   } catch (error) {
-    console.error('❌ Gemini API call failed:', error);
     
     // Provide more specific error messages
     if (error.code === 'NETWORK_ERROR' || error.message.includes('Network Error')) {
@@ -229,8 +224,6 @@ Please respond ONLY with valid JSON.`;
  */
 const parseScrapedMenuAnalysis = (content, menuItems) => {
   try {
-    console.log('🔍 Gemini API: Parsing scraped menu analysis response...');
-    console.log(`📄 Gemini API: Response length: ${content.length} characters`);
     
     // Clean up the response - remove markdown code blocks if present
     let cleanedContent = content.replace(/```json\s*|\s*```/g, '').trim();
@@ -243,7 +236,7 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       cleanedContent = cleanedContent.substring(jsonStart, jsonEnd);
     }
     
-    console.log(`🔍 Gemini API: Attempting to parse JSON response...`);
+    
     const parsed = JSON.parse(cleanedContent);
     
     // Validate and normalize the response
@@ -265,14 +258,11 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
     };
     
-    console.log(`✅ Gemini API: Successfully parsed ${normalized.vegetarianItems.length} vegetarian items`);
-    console.log(`📊 Gemini API: Overall confidence: ${(normalized.confidence * 100).toFixed(1)}%`);
     
     return normalized;
     
   } catch (parseError) {
-    console.error('❌ Gemini API: Failed to parse scraped menu analysis response as JSON:', parseError.message);
-    console.log('📝 Gemini API: Raw response content:', content.substring(0, 500));
+    
     
     // Manual extraction fallback
     return {

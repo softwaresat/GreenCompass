@@ -1,6 +1,11 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, StatusBar } from 'react-native';
 import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import Button from '../components/ui/Button';
+import Colors from '../constants/Colors';
+import Typography from '../constants/Typography';
+import Spacing from '../constants/Spacing';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -11,25 +16,61 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        {/* Logo Placeholder */}
-        <View style={styles.logoPlaceholder}>
-          <Text style={styles.logoText}>🧭</Text>
+      <StatusBar barStyle="light-content" backgroundColor={Colors.primary[600]} />
+      
+      <LinearGradient
+        colors={[Colors.primary[600], Colors.primary[500]]}
+        style={styles.background}
+      >
+        <View style={styles.content}>
+          {/* Hero Section */}
+          <View style={styles.heroSection}>
+            <View style={styles.logoContainer}>
+              <View style={styles.logoBackground}>
+                <Text style={styles.logoText}>🧭</Text>
+              </View>
+            </View>
+            
+            <Text style={styles.title}>GreenCompass</Text>
+            <Text style={styles.subtitle}>
+              Discover vegetarian options at nearby restaurants with AI-powered menu analysis
+            </Text>
+          </View>
+
+          {/* Features Section */}
+          <View style={styles.featuresSection}>
+            <View style={styles.featureItem}>
+              <Text style={styles.featureIcon}>📍</Text>
+              <Text style={styles.featureText}>Find restaurants near you</Text>
+            </View>
+            
+            <View style={styles.featureItem}>
+              <Text style={styles.featureIcon}>🌱</Text>
+              <Text style={styles.featureText}>AI-powered vegetarian detection</Text>
+            </View>
+            
+            <View style={styles.featureItem}>
+              <Text style={styles.featureIcon}>📱</Text>
+              <Text style={styles.featureText}>Real-time menu analysis</Text>
+            </View>
+          </View>
+
+          {/* CTA Section */}
+          <View style={styles.ctaSection}>
+            <Button
+              title="Find Vegetarian Options Nearby"
+              onPress={handleFindRestaurants}
+              variant="primary"
+              size="large"
+              style={styles.ctaButton}
+            />
+            
+            <Text style={styles.ctaSubtext}>
+              We'll analyze restaurant websites to find vegetarian and vegan options
+            </Text>
+          </View>
         </View>
-        
-        <Text style={styles.title}>GreenCompass</Text>
-        <Text style={styles.subtitle}>
-          Discover vegetarian options at nearby restaurants
-        </Text>
-        
-        <TouchableOpacity 
-          style={styles.button} 
-          onPress={handleFindRestaurants}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.buttonText}>Find Vegetarian Options Nearby</Text>
-        </TouchableOpacity>
-      </View>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
@@ -37,61 +78,102 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
+  
+  background: {
+    flex: 1,
+  },
+  
   content: {
     flex: 1,
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.container.padding,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.lg,
+  },
+  
+  heroSection: {
+    alignItems: 'center',
+    marginTop: Spacing.xl,
+  },
+  
+  logoContainer: {
+    marginBottom: Spacing.lg,
+  },
+  
+  logoBackground: {
+    width: 100,
+    height: 100,
+    backgroundColor: Colors.background.primary,
+    borderRadius: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    shadowColor: Colors.shadow.dark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 1,
+    shadowRadius: 16,
+    elevation: 8,
   },
-  logoPlaceholder: {
-    width: 80,
-    height: 80,
-    backgroundColor: '#4CAF50',
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-  },
+  
   logoText: {
-    fontSize: 40,
-    color: '#fff',
+    fontSize: 48,
   },
+  
   title: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-    marginBottom: 10,
+    ...Typography.h1,
+    color: Colors.text.inverse,
     textAlign: 'center',
+    marginBottom: Spacing.md,
   },
+  
   subtitle: {
-    fontSize: 18,
-    color: '#666',
+    ...Typography.body,
+    color: Colors.text.inverse,
     textAlign: 'center',
-    marginBottom: 50,
+    opacity: 0.9,
     lineHeight: 24,
+    paddingHorizontal: Spacing.md,
   },
-  button: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 10,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+  
+  featuresSection: {
+    marginVertical: Spacing.xl,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
+  
+  featureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+  },
+  
+  featureIcon: {
+    fontSize: 24,
+    marginRight: Spacing.md,
+    width: 32,
     textAlign: 'center',
+  },
+  
+  featureText: {
+    ...Typography.body,
+    color: Colors.text.inverse,
+    opacity: 0.9,
+    flex: 1,
+  },
+  
+  ctaSection: {
+    alignItems: 'center',
+  },
+  
+  ctaButton: {
+    width: '100%',
+    marginBottom: Spacing.md,
+  },
+  
+  ctaSubtext: {
+    ...Typography.bodySmall,
+    color: Colors.text.inverse,
+    textAlign: 'center',
+    opacity: 0.8,
+    lineHeight: 20,
   },
 }); 

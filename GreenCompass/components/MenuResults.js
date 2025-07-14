@@ -1,5 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList } from 'react-native';
+import Button from './ui/Button';
+import Card from './ui/Card';
+import Colors from '../constants/Colors';
+import Typography from '../constants/Typography';
+import Spacing from '../constants/Spacing';
 
 export default function MenuResults({ results, onRetryAnalysis }) {
   if (!results) {
@@ -28,7 +33,7 @@ export default function MenuResults({ results, onRetryAnalysis }) {
     const veganCount = vegetarianItems.filter(item => item.isVegan).length;
 
     return (
-      <View style={styles.summaryCard}>
+      <Card variant="elevated" style={styles.summaryCard}>
         <Text style={styles.summaryTitle}>Website Analysis Summary</Text>
         
         <View style={styles.statsRow}>
@@ -37,11 +42,11 @@ export default function MenuResults({ results, onRetryAnalysis }) {
             <Text style={styles.statLabel}>Items Found</Text>
           </View>
           <View style={styles.statItem}>
-            <Text style={[styles.statNumber, { color: '#4CAF50' }]}>{vegetarianCount}</Text>
+            <Text style={[styles.statNumber, { color: Colors.primary[500] }]}>{vegetarianCount}</Text>
             <Text style={styles.statLabel}>Vegetarian</Text>
           </View>
           <View style={styles.statItem}>
-            <Text style={[styles.statNumber, { color: '#2196F3' }]}>{veganCount}</Text>
+            <Text style={[styles.statNumber, { color: Colors.accent.blue }]}>{veganCount}</Text>
             <Text style={styles.statLabel}>Vegan</Text>
           </View>
         </View>
@@ -64,44 +69,48 @@ export default function MenuResults({ results, onRetryAnalysis }) {
             <Text style={styles.summaryText}>{summary}</Text>
           </View>
         )}
-      </View>
+      </Card>
     );
   };
 
   const renderScrapingInfo = () => (
-    <View style={styles.infoCard}>
+    <Card variant="default" style={styles.infoCard}>
       <Text style={styles.infoTitle}>Website Analysis Details</Text>
       <Text style={styles.infoText}>Website: {websiteUrl || 'Not available'}</Text>
       <Text style={styles.infoText}>Items Found: {scrapingInfo?.itemsFound || 0}</Text>
       <Text style={styles.infoText}>Scraping Method: {scrapingInfo?.scrapingMethod || 'Unknown'}</Text>
-    </View>
+    </Card>
   );
 
   const renderVegetarianItems = () => {
     if (vegetarianItems.length === 0) {
       return (
-        <View style={styles.noItemsContainer}>
+        <Card variant="outlined" style={styles.noItemsContainer}>
           <Text style={styles.noItemsText}>No vegetarian items found on the website menu.</Text>
           <Text style={styles.noItemsSubtext}>
             This could mean the restaurant has no vegetarian options, or the website menu couldn't be properly analyzed.
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={onRetryAnalysis}>
-            <Text style={styles.retryButtonText}>Try Again</Text>
-          </TouchableOpacity>
-        </View>
+          <Button 
+            title="Try Again" 
+            onPress={onRetryAnalysis}
+            variant="primary"
+            style={styles.retryButton}
+          />
+        </Card>
       );
     }
 
     return (
-      <View style={styles.itemsContainer}>
+      <Card variant="default" style={styles.itemsContainer}>
         <Text style={styles.itemsTitle}>Vegetarian Options Found:</Text>
         <FlatList
           data={vegetarianItems}
           keyExtractor={(item, index) => `${item.name}-${index}`}
           renderItem={renderVegetarianItem}
           showsVerticalScrollIndicator={false}
+          scrollEnabled={false}
         />
-      </View>
+      </Card>
     );
   };
 
@@ -109,7 +118,11 @@ export default function MenuResults({ results, onRetryAnalysis }) {
     <View style={styles.menuItem}>
       <View style={styles.itemHeader}>
         <Text style={styles.itemName}>{item.name}</Text>
-        {item.isVegan && <Text style={styles.veganBadge}>VEGAN</Text>}
+        {item.isVegan && (
+          <View style={styles.veganBadge}>
+            <Text style={styles.veganBadgeText}>VEGAN</Text>
+          </View>
+        )}
       </View>
       
       {item.description && (
@@ -130,12 +143,12 @@ export default function MenuResults({ results, onRetryAnalysis }) {
 
   const getRatingColor = (rating) => {
     switch (rating?.toLowerCase()) {
-      case 'excellent': return '#4CAF50';
-      case 'good': return '#8BC34A';
-      case 'fair': return '#FFC107';
-      case 'poor': return '#FF9800';
-      case 'very poor': return '#F44336';
-      default: return '#757575';
+      case 'excellent': return Colors.success;
+      case 'good': return Colors.primary[500];
+      case 'fair': return Colors.warning;
+      case 'poor': return Colors.accent.orange;
+      case 'very poor': return Colors.error;
+      default: return Colors.text.tertiary;
     }
   };
 
@@ -151,217 +164,213 @@ export default function MenuResults({ results, onRetryAnalysis }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Colors.background.secondary,
   },
+  
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Colors.background.secondary,
   },
+  
   errorText: {
-    fontSize: 16,
-    color: '#666',
+    ...Typography.body,
+    color: Colors.text.secondary,
     textAlign: 'center',
   },
+  
   summaryCard: {
-    backgroundColor: '#fff',
-    margin: 15,
-    padding: 20,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    margin: Spacing.card.margin,
+    padding: Spacing.lg,
   },
+  
   summaryTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-    color: '#333',
+    ...Typography.h4,
+    color: Colors.text.primary,
+    marginBottom: Spacing.lg,
   },
+  
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginBottom: 15,
+    marginBottom: Spacing.lg,
   },
+  
   statItem: {
     alignItems: 'center',
   },
+  
   statNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 28,
+    fontWeight: Typography.fontWeight.bold,
+    color: Colors.text.primary,
   },
+  
   statLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
+    ...Typography.caption,
+    color: Colors.text.secondary,
+    marginTop: Spacing.xs,
   },
+  
   ratingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: Spacing.md,
   },
+  
   ratingLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginRight: 8,
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginRight: Spacing.sm,
   },
+  
   ratingText: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    ...Typography.h6,
+    fontWeight: Typography.fontWeight.bold,
   },
+  
   confidenceContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: Spacing.md,
   },
+  
   confidenceLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginRight: 8,
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginRight: Spacing.sm,
   },
+  
   confidenceText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    ...Typography.h6,
+    fontWeight: Typography.fontWeight.bold,
+    color: Colors.text.primary,
   },
+  
   summaryContainer: {
-    marginTop: 10,
+    marginTop: Spacing.md,
   },
+  
   summaryLabel: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 5,
+    ...Typography.h6,
+    color: Colors.text.primary,
+    marginBottom: Spacing.sm,
   },
+  
   summaryText: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
     lineHeight: 20,
   },
+  
   infoCard: {
-    backgroundColor: '#fff',
-    margin: 15,
+    margin: Spacing.card.margin,
     marginTop: 0,
-    padding: 15,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    padding: Spacing.md,
   },
+  
   infoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#333',
+    ...Typography.h6,
+    color: Colors.text.primary,
+    marginBottom: Spacing.sm,
   },
+  
   infoText: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginBottom: Spacing.xs,
   },
+  
   noItemsContainer: {
-    backgroundColor: '#fff',
-    margin: 15,
+    margin: Spacing.card.margin,
     marginTop: 0,
-    padding: 20,
-    borderRadius: 10,
+    padding: Spacing.lg,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
+  
   noItemsText: {
-    fontSize: 16,
-    color: '#666',
+    ...Typography.body,
+    color: Colors.text.secondary,
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: Spacing.sm,
   },
+  
   noItemsSubtext: {
-    fontSize: 14,
-    color: '#999',
+    ...Typography.bodySmall,
+    color: Colors.text.tertiary,
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: Spacing.lg,
+    lineHeight: 20,
   },
+  
   retryButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
+    marginTop: Spacing.sm,
   },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  
   itemsContainer: {
-    backgroundColor: '#fff',
-    margin: 15,
+    margin: Spacing.card.margin,
     marginTop: 0,
-    padding: 15,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    padding: Spacing.md,
   },
+  
   itemsTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 15,
-    color: '#333',
+    ...Typography.h6,
+    color: Colors.text.primary,
+    marginBottom: Spacing.md,
   },
+  
   menuItem: {
-    backgroundColor: '#f9f9f9',
-    padding: 15,
-    marginBottom: 10,
+    backgroundColor: Colors.background.secondary,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
     borderRadius: 8,
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: Colors.primary[500],
   },
+  
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: Spacing.xs,
   },
+  
   itemName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    ...Typography.h6,
+    color: Colors.text.primary,
     flex: 1,
   },
+  
   veganBadge: {
-    backgroundColor: '#2196F3',
-    color: '#fff',
-    fontSize: 10,
-    paddingHorizontal: 6,
+    backgroundColor: Colors.accent.blue,
+    paddingHorizontal: Spacing.sm,
     paddingVertical: 2,
-    borderRadius: 3,
-    fontWeight: 'bold',
+    borderRadius: 4,
   },
+  
+  veganBadgeText: {
+    ...Typography.caption,
+    color: Colors.text.inverse,
+    fontWeight: Typography.fontWeight.bold,
+  },
+  
   itemDescription: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginBottom: Spacing.xs,
     lineHeight: 18,
   },
+  
   itemPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-    marginBottom: 5,
+    ...Typography.h6,
+    fontWeight: Typography.fontWeight.bold,
+    color: Colors.primary[500],
+    marginBottom: Spacing.xs,
   },
+  
   itemConfidence: {
-    fontSize: 12,
-    color: '#999',
+    ...Typography.caption,
+    color: Colors.text.tertiary,
   },
 }); 

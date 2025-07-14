@@ -4,52 +4,86 @@ import { Platform } from 'react-native';
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_MAPS_API_KEY;
 
 /**
+ * Haversine formula to calculate distance between two lat/lng points in miles
+ */
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const R = 3958.8; // Radius of Earth in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
  * Get nearby restaurants using Google Places API
- * @param {Object} location - Location object with latitude and longitude
+ * @param {Object} location - Location object with latitude and longitude (user's location)
  * @param {number} radius - Search radius in meters
  * @returns {Promise<Array>} Array of restaurant objects
  */
-export const getNearbyRestaurants = async (location, radius = 5000) => {
+export const getNearbyRestaurants = async (location, radius = 16093) => { // 10 miles in meters
   try {
     if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'your_maps_api_key_here') {
       throw new Error('Google Maps API key not configured');
     }
 
-    console.log('🔍 Fetching nearby restaurants...');
-    console.log(`📍 Location: ${location.latitude}, ${location.longitude}`);
-    console.log(`🎯 Radius: ${radius}m`);
-
-    const response = await axios.get(
-      'https://maps.googleapis.com/maps/api/place/nearbysearch/json',
-      {
-        params: {
-          key: GOOGLE_MAPS_API_KEY,
-          location: `${location.latitude},${location.longitude}`,
-          radius: radius,
-          type: 'restaurant',
-          fields: 'place_id,name,rating,price_level,vicinity,geometry'
+    let allResults = [];
+    let nextPageToken = null;
+    let page = 0;
+    do {
+      let params = {
+        key: GOOGLE_MAPS_API_KEY,
+        location: `${location.latitude},${location.longitude}`,
+        radius: radius,
+        type: 'restaurant',
+        fields: 'place_id,name,rating,price_level,vicinity,geometry'
+      };
+      if (nextPageToken) {
+        params.pagetoken = nextPageToken;
+      }
+      const response = await axios.get(
+        'https://maps.googleapis.com/maps/api/place/nearbysearch/json',
+        { params }
+      );
+      if (response.data.status === 'OK') {
+        const restaurants = response.data.results.map(place => {
+          const lat = place.geometry?.location?.lat || 0;
+          const lng = place.geometry?.location?.lng || 0;
+          const distanceMiles = haversineDistance(location.latitude, location.longitude, lat, lng);
+          return {
+            id: place.place_id,
+            name: place.name,
+            rating: place.rating || 0,
+            priceLevel: place.price_level || 0,
+            vicinity: place.vicinity || '',
+            latitude: lat,
+            longitude: lng,
+            distanceMiles: distanceMiles,
+          };
+        });
+        allResults = allResults.concat(restaurants);
+        nextPageToken = response.data.next_page_token;
+        page++;
+        if (nextPageToken && page < 3) {
+          // Google requires a short delay before using next_page_token
+          await new Promise(res => setTimeout(res, 2000));
+        } else {
+          nextPageToken = null;
+        }
+      } else {
+        nextPageToken = null;
+        if (allResults.length === 0) {
+          throw new Error(`Google Places API error: ${response.data.status}`);
         }
       }
-    );
+    } while (nextPageToken && allResults.length < 60);
 
-    if (response.data.status === 'OK') {
-      const restaurants = response.data.results.map(place => ({
-        id: place.place_id,
-        name: place.name,
-        rating: place.rating || 0,
-        priceLevel: place.price_level || 0,
-        vicinity: place.vicinity || '',
-        latitude: place.geometry?.location?.lat || 0,
-        longitude: place.geometry?.location?.lng || 0,
-      }));
-
-      console.log(`✅ Found ${restaurants.length} restaurants`);
-      return restaurants;
-    } else {
-      throw new Error(`Google Places API error: ${response.data.status}`);
-    }
+    return allResults;
   } catch (error) {
-    console.error('❌ Error fetching restaurants:', error);
     throw error;
   }
 };
@@ -65,16 +99,13 @@ export const getRestaurantDetails = async (placeId) => {
       throw new Error('Google Maps API key not configured');
     }
 
-    console.log('🔍 Fetching restaurant details...');
-    console.log(`🆔 Place ID: ${placeId}`);
-
     const response = await axios.get(
       'https://maps.googleapis.com/maps/api/place/details/json',
       {
         params: {
           key: GOOGLE_MAPS_API_KEY,
           place_id: placeId,
-          fields: 'place_id,name,rating,formatted_phone_number,formatted_address,website,opening_hours,price_level,types'
+          fields: 'place_id,name,rating,formatted_phone_number,formatted_address,website,opening_hours,price_level,types,geometry'
         }
       }
     );
@@ -91,18 +122,16 @@ export const getRestaurantDetails = async (placeId) => {
         priceLevel: place.price_level || 0,
         types: place.types || [],
         openingHours: place.opening_hours?.weekday_text || [],
-        isOpen: place.opening_hours?.open_now || false
+        isOpen: place.opening_hours?.open_now || false,
+        latitude: place.geometry?.location?.lat || 0,
+        longitude: place.geometry?.location?.lng || 0,
       };
 
-      console.log(`✅ Retrieved details for: ${details.name}`);
-      console.log(`🌐 Website: ${details.website || 'No website available'}`);
-      
       return details;
     } else {
       throw new Error(`Google Places API error: ${response.data.status}`);
     }
   } catch (error) {
-    console.error('❌ Error fetching restaurant details:', error);
     throw error;
   }
 };
@@ -117,8 +146,6 @@ export const analyzeRestaurantWebsite = async (placeId) => {
     // Get restaurant details including website URL
     const restaurantDetails = await getRestaurantDetails(placeId);
     
-    console.log(`🔍 Starting website analysis for ${restaurantDetails.name}...`);
-
     // Check if website is available
     if (!restaurantDetails.website) {
       return {
@@ -135,7 +162,6 @@ export const analyzeRestaurantWebsite = async (placeId) => {
     }
 
     // Scrape the website for menu data
-    console.log(`🌐 Scraping website: ${restaurantDetails.website}`);
     const { scrapeRestaurantMenu } = await import('./webScrapingService');
     const menuData = await scrapeRestaurantMenu(restaurantDetails.website);
 
@@ -154,15 +180,12 @@ export const analyzeRestaurantWebsite = async (placeId) => {
     }
 
     // Analyze scraped menu for vegetarian options
-    console.log(`🤖 Analyzing scraped menu with ${menuData.menuItems.length} items...`);
     const { analyzeScrapedMenuForVegetarianOptions } = await import('./llmService');
     const menuAnalysis = await analyzeScrapedMenuForVegetarianOptions(
       menuData.menuItems,
       restaurantDetails.name
     );
 
-    console.log('✅ Website analysis completed successfully');
-    
     return {
       success: true,
       restaurantInfo: restaurantDetails,
@@ -175,7 +198,6 @@ export const analyzeRestaurantWebsite = async (placeId) => {
     };
 
   } catch (error) {
-    console.error('🚨 Error in website analysis:', error);
     return {
       success: false,
       error: error.message,
@@ -187,5 +209,51 @@ export const analyzeRestaurantWebsite = async (placeId) => {
         totalItems: 0
       }
     };
+  }
+}; 
+
+/**
+ * Search for restaurants by text query using Google Places Text Search API
+ * @param {string} query - The search query (name, address, etc.)
+ * @param {Object} location - User's location { latitude, longitude }
+ * @returns {Promise<Array>} Array of restaurant objects
+ */
+export const searchRestaurantsByText = async (query, location) => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'your_maps_api_key_here') {
+      throw new Error('Google Maps API key not configured');
+    }
+    const params = {
+      key: GOOGLE_MAPS_API_KEY,
+      query: query,
+      location: `${location.latitude},${location.longitude}`,
+      radius: 16093, // 10 miles
+      type: 'restaurant',
+    };
+    const response = await axios.get(
+      'https://maps.googleapis.com/maps/api/place/textsearch/json',
+      { params }
+    );
+    if (response.data.status === 'OK') {
+      return response.data.results.map(place => {
+        const lat = place.geometry?.location?.lat || 0;
+        const lng = place.geometry?.location?.lng || 0;
+        const distanceMiles = haversineDistance(location.latitude, location.longitude, lat, lng);
+        return {
+          id: place.place_id,
+          name: place.name,
+          rating: place.rating || 0,
+          priceLevel: place.price_level || 0,
+          vicinity: place.formatted_address || place.vicinity || '',
+          latitude: lat,
+          longitude: lng,
+          distanceMiles: distanceMiles,
+        };
+      });
+    } else {
+      throw new Error(`Google Places Text Search error: ${response.data.status}`);
+    }
+  } catch (error) {
+    return [];
   }
 }; 
