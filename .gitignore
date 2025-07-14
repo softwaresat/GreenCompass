@@ -35,7 +35,6 @@ yarn-error.*
 .env*.local
 
 # Google Cloud service account keys
-*.json
 natural-metric-*.json
 
 # typescript
