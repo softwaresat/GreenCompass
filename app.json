@@ -52,10 +52,8 @@
       "typedRoutes": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "584c0288-6de5-4758-87d0-f753ba561623"
-      }
-    }
+      "router": {}
+    },
+    "owner": "agsatvik"
   }
 }
