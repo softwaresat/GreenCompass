@@ -1,4 +1,4 @@
-# VeggieVision 🥬📱
+# GreenCompass 🧭📱
 
 A React Native mobile app that helps users find vegetarian options at nearby restaurants using location services, Google Maps integration, OCR menu analysis, and AI-powered ingredient detection.
 
@@ -37,7 +37,7 @@ A React Native mobile app that helps users find vegetarian options at nearby res
 ## 🏗️ Project Structure
 
 ```
-VeggieVision/
+GreenCompass/
 ├── app/
 │   ├── _layout.js         # Main navigation layout
 │   ├── index.js           # Home screen with main CTA button
@@ -60,7 +60,7 @@ VeggieVision/
 ### 1. Clone and Install
 ```bash
 git clone <repository-url>
-cd VeggieVision
+cd GreenCompass
 npm install
 ```
 
@@ -221,4 +221,4 @@ For issues and questions:
 
 ---
 
-**VeggieVision** - Making vegetarian dining choices easier with AI! 🌱✨ 
+**GreenCompass** - Making vegetarian dining choices easier with AI! 🌱✨
