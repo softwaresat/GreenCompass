@@ -30,11 +30,9 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       };
     }
 
-    // Create a focused prompt for vegetarian analysis of scraped menu
+    // Create a focused prompt for vegetarian analysis of scraped menu (no batching)
     const prompt = createScrapedMenuAnalysisPrompt(menuItems, restaurantName);
-    
     const analysisResult = await callGeminiAPI(prompt, apiKey);
-    
     if (analysisResult.success) {
       return parseScrapedMenuAnalysis(analysisResult.content, menuItems);
     } else {
@@ -46,6 +44,54 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
 };
 
 /**
+ * Helper to split an array into batches
+ * @param {Array} arr - The array to split
+ * @param {number} batchSize - The size of each batch
+ * @returns {Array<Array>} Array of batches
+ */
+const splitIntoBatches = (arr, batchSize) => {
+  const batches = [];
+  for (let i = 0; i < arr.length; i += batchSize) {
+    batches.push(arr.slice(i, i + batchSize));
+  }
+  return batches;
+};
+
+/**
+ * Helper to aggregate results from multiple Gemini API responses
+ * @param {Array<Object>} batchResults - Array of parsed batch results
+ * @returns {Object} Aggregated result
+ */
+const aggregateBatchResults = (batchResults) => {
+  const allVegetarianItems = batchResults.flatMap(r => r.vegetarianItems || []);
+  const allRecommendations = batchResults.flatMap(r => r.recommendations || []);
+  const summaries = batchResults.map(r => r.summary).filter(Boolean);
+  const confidences = batchResults.map(r => r.confidence).filter(c => typeof c === 'number');
+  const totalItems = batchResults.reduce((sum, r) => sum + (r.totalItems || 0), 0);
+  // Use the 'worst' friendliness (limited < fair < good < excellent)
+  const friendlinessOrder = ['limited', 'fair', 'good', 'excellent'];
+  let friendliness = 'unknown';
+  for (const r of batchResults) {
+    if (r.restaurantVegFriendliness && friendlinessOrder.includes(r.restaurantVegFriendliness)) {
+      if (
+        friendliness === 'unknown' ||
+        friendlinessOrder.indexOf(r.restaurantVegFriendliness) < friendlinessOrder.indexOf(friendliness)
+      ) {
+        friendliness = r.restaurantVegFriendliness;
+      }
+    }
+  }
+  return {
+    vegetarianItems: allVegetarianItems,
+    summary: summaries.join(' '),
+    restaurantVegFriendliness: friendliness,
+    totalItems,
+    confidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : 0.5,
+    recommendations: Array.from(new Set(allRecommendations)),
+  };
+};
+
+/**
  * Call Gemini API with retry logic
  * @param {string} prompt - The prompt to send to Gemini
  * @param {string} apiKey - Gemini API key
@@ -54,11 +100,11 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
 const callGeminiAPI = async (prompt, apiKey) => {
   try {
     
-    // Try gemini-2.5-flash-lite first (fastest and most cost-effective)
+    // Try gemini-2.0-flash-lite first (fastest and most cost-effective)
     let response;
     try {
       response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`,
         {
           contents: [{
             parts: [{
@@ -70,13 +116,15 @@ const callGeminiAPI = async (prompt, apiKey) => {
           headers: {
             'Content-Type': 'application/json',
           },
-          timeout: 30000, // 30 second timeout
+          timeout: 10000, // 10 second timeout
         }
       );
+      console.info('[Gemini] 2.0-flash-lite response:', JSON.stringify(response.data));
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.info('[Gemini] Model used: gemini-2.5-flash-lite');
+        console.info('[Gemini] Model used: gemini-2.0-flash-lite');
       }
     } catch (primaryError) {
+      console.error('[Gemini] 2.0-flash-lite error:', primaryError?.response?.data || primaryError.message);
       
       try {
         // Fallback to gemini-2.5-flash
@@ -93,13 +141,15 @@ const callGeminiAPI = async (prompt, apiKey) => {
             headers: {
               'Content-Type': 'application/json',
             },
-            timeout: 30000,
+            timeout: 10000,
           }
         );
+        console.info('[Gemini] 2.5-flash response:', JSON.stringify(response.data));
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
           console.info('[Gemini] Model used: gemini-2.5-flash');
         }
       } catch (secondaryError) {
+        console.error('[Gemini] 2.5-flash error:', secondaryError?.response?.data || secondaryError.message);
         
         // Final fallback to gemini-1.5-flash
         response = await axios.post(
@@ -115,7 +165,7 @@ const callGeminiAPI = async (prompt, apiKey) => {
             headers: {
               'Content-Type': 'application/json',
             },
-            timeout: 30000,
+            timeout: 10000,
           }
         );
         if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -166,9 +216,12 @@ const callGeminiAPI = async (prompt, apiKey) => {
  * @returns {string} Formatted prompt for Gemini API
  */
 const createScrapedMenuAnalysisPrompt = (menuItems, restaurantName) => {
-  const itemsText = menuItems.map((item, index) => 
-    `${index + 1}. ${item.name}: ${item.description || 'No description'} ${item.price ? `(${item.price})` : ''}`
-  ).join('\n');
+  const itemsText = menuItems.map((item, index) => {
+    // Shorten description to 100 characters max
+    let desc = (item.description || 'No description').trim();
+    if (desc.length > 100) desc = desc.slice(0, 100) + '...';
+    return `${index + 1}. ${item.name}: ${desc}`;
+  }).join('\n');
 
   return `You are a multilingual vegetarian dining expert analyzing a restaurant menu. The menu items may be in any language (English, Spanish, French, Italian, German, Portuguese, Japanese, Chinese, etc.). Please analyze the following menu items from "${restaurantName}" and identify vegetarian-friendly options.
 
@@ -190,7 +243,7 @@ RESPONSE FORMAT (JSON):
   "vegetarianItems": [
     {
       "name": "Item Name",
-      "description": "Brief description if available",
+      "description": "Brief description if available, if not available, create a description based on your knowledge of your item with a disclaimer",
       "price": "Price if listed",
       "category": "appetizer|main|side|dessert|beverage",
       "confidence": 0.95,
