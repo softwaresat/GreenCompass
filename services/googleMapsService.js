@@ -1,5 +1,4 @@
 import axios from 'axios';
-import { Platform } from 'react-native';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_MAPS_API_KEY;
 
@@ -179,9 +178,11 @@ export const analyzeRestaurantWebsite = async (placeId) => {
       };
     }
 
-    // Analyze scraped menu for vegetarian options
+    // Analyze menu and get enhanced items in a single step
     const { analyzeScrapedMenuForVegetarianOptions } = await import('./llmService');
-    const menuAnalysis = await analyzeScrapedMenuForVegetarianOptions(
+    
+    // Analyze menu for vegetarian options and enhance menu items in one call
+    const analysisResults = await analyzeScrapedMenuForVegetarianOptions(
       menuData.menuItems,
       restaurantDetails.name
     );
@@ -189,7 +190,15 @@ export const analyzeRestaurantWebsite = async (placeId) => {
     return {
       success: true,
       restaurantInfo: restaurantDetails,
-      menuAnalysis: menuAnalysis,
+      menuAnalysis: {
+        vegetarianItems: analysisResults.vegetarianItems || [],
+        summary: analysisResults.summary || "",
+        confidence: analysisResults.confidence || 0,
+        totalItems: analysisResults.totalItems || 0,
+        overallRating: analysisResults.overallRating || "unknown",
+        recommendations: analysisResults.recommendations || []
+      },
+      enhancedMenuItems: analysisResults.enhancedMenuItems || [],
       scrapingInfo: {
         url: restaurantDetails.website,
         itemsFound: menuData.menuItems.length,

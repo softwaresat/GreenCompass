@@ -1,10 +1,9 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, FlatList } from 'react-native';
+import { FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Colors from '../constants/Colors';
+import Spacing from '../constants/Spacing';
+import Typography from '../constants/Typography';
 import Button from './ui/Button';
 import Card from './ui/Card';
-import Colors from '../constants/Colors';
-import Typography from '../constants/Typography';
-import Spacing from '../constants/Spacing';
 
 export default function MenuResults({ results, onRetryAnalysis }) {
   if (!results) {
@@ -18,6 +17,7 @@ export default function MenuResults({ results, onRetryAnalysis }) {
   const { 
     restaurantName, 
     menuAnalysis,
+    enhancedMenuItems = [],
     scrapingInfo,
     websiteUrl,
     overallRating,
@@ -31,15 +31,18 @@ export default function MenuResults({ results, onRetryAnalysis }) {
   const renderSummaryCard = () => {
     const vegetarianCount = vegetarianItems.length;
     const veganCount = vegetarianItems.filter(item => item.isVegan).length;
+    
+    // Calculate real displayed item count instead of using totalItems
+    const displayedTotalItems = vegetarianCount;
 
     return (
       <Card variant="elevated" style={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>Website Analysis Summary</Text>
+        <Text style={styles.summaryTitle}>Restaurant Summary</Text>
         
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{totalItems}</Text>
-            <Text style={styles.statLabel}>Items Found</Text>
+            <Text style={styles.statNumber}>{displayedTotalItems}</Text>
+            <Text style={styles.statLabel}>Veg Items</Text>
           </View>
           <View style={styles.statItem}>
             <Text style={[styles.statNumber, { color: Colors.primary[500] }]}>{vegetarianCount}</Text>
@@ -53,8 +56,8 @@ export default function MenuResults({ results, onRetryAnalysis }) {
 
         <View style={styles.ratingContainer}>
           <Text style={styles.ratingLabel}>Veg-Friendliness:</Text>
-          <Text style={[styles.ratingText, { color: getRatingColor(overallRating) }]}>
-            {overallRating || 'Unknown'}
+          <Text style={[styles.ratingText, { color: getRatingColor(overallRating && overallRating.toLowerCase() !== 'unknown' ? overallRating : calculateVegFriendliness()) }]}>
+            {overallRating && overallRating.toLowerCase() !== 'unknown' ? overallRating : calculateVegFriendliness()}
           </Text>
         </View>
 
@@ -73,14 +76,7 @@ export default function MenuResults({ results, onRetryAnalysis }) {
     );
   };
 
-  const renderScrapingInfo = () => (
-    <Card variant="default" style={styles.infoCard}>
-      <Text style={styles.infoTitle}>Website Analysis Details</Text>
-      <Text style={styles.infoText}>Website: {websiteUrl || 'Not available'}</Text>
-      <Text style={styles.infoText}>Items Found: {scrapingInfo?.itemsFound || 0}</Text>
-      <Text style={styles.infoText}>Scraping Method: {scrapingInfo?.scrapingMethod || 'Unknown'}</Text>
-    </Card>
-  );
+ 
 
   const renderVegetarianItems = () => {
     if (vegetarianItems.length === 0) {
@@ -100,46 +96,157 @@ export default function MenuResults({ results, onRetryAnalysis }) {
       );
     }
 
+    // Group items by category
+    const groupedItems = groupItemsByCategory(vegetarianItems);
+    
     return (
       <Card variant="default" style={styles.itemsContainer}>
-        <Text style={styles.itemsTitle}>Vegetarian Options Found:</Text>
-        <FlatList
-          data={vegetarianItems}
-          keyExtractor={(item, index) => `${item.name}-${index}`}
-          renderItem={renderVegetarianItem}
-          showsVerticalScrollIndicator={false}
-          scrollEnabled={false}
-        />
+        
+        {Object.keys(groupedItems).map((category) => (
+          <View key={category} style={styles.categorySection}>
+            <View style={styles.categoryHeader}>
+              <Text style={styles.categoryTitle}>{formatCategoryName(category)}</Text>
+              <Text style={styles.itemCount}>{groupedItems[category].length} items</Text>
+            </View>
+            
+            <FlatList
+              data={groupedItems[category]}
+              keyExtractor={(item, index) => `${item.name}-${index}`}
+              renderItem={renderVegetarianItem}
+              showsVerticalScrollIndicator={false}
+              scrollEnabled={false}
+            />
+          </View>
+        ))}
       </Card>
     );
   };
 
-  const renderVegetarianItem = ({ item }) => (
-    <View style={styles.menuItem}>
-      <View style={styles.itemHeader}>
-        <Text style={styles.itemName}>{item.name}</Text>
-        {item.isVegan && (
-          <View style={styles.veganBadge}>
-            <Text style={styles.veganBadgeText}>VEGAN</Text>
-          </View>
+  // Group items by their category
+  const groupItemsByCategory = (items) => {
+    const grouped = {};
+    
+    items.forEach(item => {
+      // Normalize category to lowercase and handle missing categories
+      const category = (item.category || 'other').toLowerCase();
+      if (!grouped[category]) {
+        grouped[category] = [];
+      }
+      grouped[category].push(item);
+    });
+    
+    // Sort categories in a logical meal order
+    const orderedGrouped = {};
+    const categoryOrder = [
+      'appetizer', 'starter', 'side', 
+      'main', 'entree', 
+      'dessert', 'beverage', 
+      'breakfast', 'lunch', 'dinner', 'brunch',
+      'other'
+    ];
+    
+    // First add categories in our preferred order
+    categoryOrder.forEach(cat => {
+      if (grouped[cat] && grouped[cat].length > 0) {
+        orderedGrouped[cat] = grouped[cat];
+        delete grouped[cat];
+      }
+    });
+    
+    // Then add any remaining categories alphabetically
+    Object.keys(grouped).sort().forEach(cat => {
+      orderedGrouped[cat] = grouped[cat];
+    });
+    
+    return orderedGrouped;
+  };
+  
+  // Format category name for display
+  const formatCategoryName = (category) => {
+    const categoryMap = {
+      'main': 'Main Dishes',
+      'appetizer': 'Appetizers',
+      'starter': 'Starters',
+      'side': 'Side Dishes',
+      'dessert': 'Desserts',
+      'beverage': 'Beverages',
+      'entree': 'Entrées',
+      'other': 'Other Items',
+      'breakfast': 'Breakfast',
+      'lunch': 'Lunch',
+      'dinner': 'Dinner',
+      'brunch': 'Brunch',
+      'snack': 'Snacks',
+      'salad': 'Salads',
+      'soup': 'Soups',
+      'sandwich': 'Sandwiches',
+      'pizza': 'Pizza',
+      'pasta': 'Pasta',
+      'rice': 'Rice Dishes',
+      'noodle': 'Noodle Dishes',
+      'curry': 'Curries',
+      'burger': 'Burgers',
+      'wrap': 'Wraps',
+      'bread': 'Breads',
+      'pastry': 'Pastries',
+      'cake': 'Cakes',
+      'ice cream': 'Ice Cream',
+      'coffee': 'Coffee',
+      'tea': 'Tea',
+      'smoothie': 'Smoothies',
+      'juice': 'Juices',
+      'cocktail': 'Cocktails',
+      'special': 'Specials',
+      'combo': 'Combo Meals',
+    };
+    
+    // If the category is in our map, use that
+    if (categoryMap[category?.toLowerCase()]) {
+      return categoryMap[category.toLowerCase()];
+    }
+    
+    // Default: capitalize first letter of each word
+    return category.split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  const renderVegetarianItem = ({ item }) => {
+    // Find matching enhanced item (if available)
+    const enhancedItem = enhancedMenuItems.find(enhancedItem => 
+      enhancedItem.name.toLowerCase() === item.name.toLowerCase()
+    );
+    
+    // Use enhanced name if available
+    const displayName = enhancedItem?.name || item.name;
+    
+    return (
+      <View style={styles.menuItem}>
+        <View style={styles.itemHeader}>
+          <Text style={styles.itemName}>{displayName}</Text>
+          {item.isVegan && (
+            <View style={styles.veganBadge}>
+              <Text style={styles.veganBadgeText}>VEGAN</Text>
+            </View>
+          )}
+        </View>
+        
+        {item.description && (
+          <Text style={styles.itemDescription}>{item.description}</Text>
+        )}
+        
+        {item.price && (
+          <Text style={styles.itemPrice}>{item.price}</Text>
+        )}
+        
+        {item.confidence !== undefined && (
+          <Text style={styles.itemConfidence}>
+            Confidence: {Math.round(item.confidence * 100)}%
+          </Text>
         )}
       </View>
-      
-      {item.description && (
-        <Text style={styles.itemDescription}>{item.description}</Text>
-      )}
-      
-      {item.price && (
-        <Text style={styles.itemPrice}>{item.price}</Text>
-      )}
-      
-      {item.confidence !== undefined && (
-        <Text style={styles.itemConfidence}>
-          Confidence: {Math.round(item.confidence * 100)}%
-        </Text>
-      )}
-    </View>
-  );
+    );
+  };
 
   const getRatingColor = (rating) => {
     switch (rating?.toLowerCase()) {
@@ -151,11 +258,53 @@ export default function MenuResults({ results, onRetryAnalysis }) {
       default: return Colors.text.tertiary;
     }
   };
+  
+  // Calculate veg-friendliness rating based on menu composition and quality of options
+  const calculateVegFriendliness = () => {
+    if (!vegetarianItems || vegetarianItems.length === 0) {
+      return 'very poor';
+    }
+    
+    // Use the actual number of items in the API response as our denominator
+    // If totalItems is unreliable or 0, default to vegetarianItems.length
+    const realTotalItems = (totalItems && totalItems > vegetarianItems.length) ? totalItems : vegetarianItems.length;
+    
+    const vegPercent = (vegetarianItems.length / realTotalItems) * 100;
+    const veganCount = vegetarianItems.filter(item => item.isVegan).length;
+    const veganPercent = (veganCount / realTotalItems) * 100;
+    
+    // Count meaningful vegetarian options (not just beverages and desserts)
+    const mainDishes = vegetarianItems.filter(item => 
+      item.category && 
+      ['main', 'entree', 'lunch', 'dinner', 'pasta', 'pizza', 'curry', 'rice', 'sandwich', 'burger'].includes(item.category.toLowerCase())
+    ).length;
+    
+    const appetizerDishes = vegetarianItems.filter(item => 
+      item.category && 
+      ['appetizer', 'starter', 'side', 'salad', 'soup'].includes(item.category.toLowerCase())
+    ).length;
+    
+    const onlyBeveragesAndDesserts = mainDishes === 0 && appetizerDishes === 0;
+    
+    // More stringent rating thresholds that consider meaningful meal options
+    if (mainDishes >= 5 && vegPercent >= 40 && veganPercent >= 20) {
+      return 'excellent';
+    } else if (mainDishes >= 3 && vegPercent >= 30 && veganPercent >= 10) {
+      return 'good';
+    } else if ((mainDishes >= 2 || appetizerDishes >= 3) && vegPercent >= 20) {
+      return 'fair';
+    } else if (mainDishes >= 1 || appetizerDishes >= 2) {
+      return 'poor';
+    } else if (onlyBeveragesAndDesserts) {
+      return 'very poor'; // Only beverages and desserts available
+    } else {
+      return 'very poor';
+    }
+  };
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {renderSummaryCard()}
-      {renderScrapingInfo()}
       {renderVegetarianItems()}
     </ScrollView>
   );
@@ -321,12 +470,10 @@ const styles = StyleSheet.create({
   },
   
   menuItem: {
-    backgroundColor: Colors.background.secondary,
+    backgroundColor: Colors.background.secondary, // Restoring gray background
     padding: Spacing.md,
     marginBottom: Spacing.sm,
     borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.primary[500],
   },
   
   itemHeader: {
@@ -370,6 +517,42 @@ const styles = StyleSheet.create({
   },
   
   itemConfidence: {
+    ...Typography.caption,
+    color: Colors.text.tertiary,
+  },
+  
+  categorySection: {
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.background.primary,
+    borderRadius: 8,
+    padding: Spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  
+  categoryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+    paddingBottom: Spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border.light,
+  },
+  
+  categoryTitle: {
+    ...Typography.subtitle,
+    color: Colors.primary[700],
+    fontWeight: Typography.fontWeight.bold,
+  },
+  
+  itemCount: {
     ...Typography.caption,
     color: Colors.text.tertiary,
   },

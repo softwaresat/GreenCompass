@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, StatusBar, Platform, TouchableOpacity } from 'react-native';
+import * as Linking from 'expo-linking';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { analyzeRestaurantWebsite } from '../services/googleMapsService';
 import LoadingIndicator from '../components/LoadingIndicator';
 import MenuResults from '../components/MenuResults';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Colors from '../constants/Colors';
-import Typography from '../constants/Typography';
 import Spacing from '../constants/Spacing';
-import * as Linking from 'expo-linking';
+import Typography from '../constants/Typography';
+import { analyzeRestaurantWebsite } from '../services/googleMapsService';
 
 export default function AnalysisScreen() {
   const { name, id } = useLocalSearchParams();
@@ -83,6 +83,7 @@ export default function AnalysisScreen() {
         
         // Menu analysis results
         menuAnalysis: analysisResults.menuAnalysis,
+        enhancedMenuItems: analysisResults.enhancedMenuItems || [],
         vegetarianItems: analysisResults.menuAnalysis?.vegetarianItems || [],
         
         // Overall assessment
