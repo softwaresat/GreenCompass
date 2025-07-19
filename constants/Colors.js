@@ -72,6 +72,9 @@ export const Colors = {
     dark: 'rgba(0, 0, 0, 0.15)',
   },
   
+  // Overlay color
+  overlay: 'rgba(0, 0, 0, 0.5)',
+  
   // Gradient colors
   gradient: {
     primary: ['#22c55e', '#16a34a'],

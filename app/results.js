@@ -1,19 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, Alert, TextInput, KeyboardAvoidingView, Platform, StatusBar, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
-import { getNearbyRestaurants, searchRestaurantsByText } from '../services/googleMapsService';
-import RestaurantListItem from '../components/RestaurantListItem';
+import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Alert, FlatList, KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import LoadingIndicator from '../components/LoadingIndicator';
+import RestaurantAnalysisResult from '../components/RestaurantAnalysisResult';
+import RestaurantListItem from '../components/RestaurantListItem';
+import SelectableRestaurantItem from '../components/SelectableRestaurantItem';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Colors from '../constants/Colors';
-import Typography from '../constants/Typography';
 import Spacing from '../constants/Spacing';
+import Typography from '../constants/Typography';
+import { analyzeSelectedRestaurants } from '../services/advancedSearchService';
+import { getNearbyRestaurants, searchRestaurantsByText } from '../services/googleMapsService';
 
 export default function ResultsScreen() {
+  const router = useRouter();
   const [restaurants, setRestaurants] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualAddress, setManualAddress] = useState('');
@@ -23,12 +28,50 @@ export default function ResultsScreen() {
   const [searchResults, setSearchResults] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
   const [locationChoiceMade, setLocationChoiceMade] = useState(false);
+  
+  // Batch analysis state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedRestaurants, setSelectedRestaurants] = useState([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const [vegCriteria, setVegCriteria] = useState('good'); // Default vegetarian criteria
+
+  // Reset state when component mounts (screen is loaded/reopened)
+  useEffect(() => {
+    // This will run every time the component mounts
+    const resetState = () => {
+      setRestaurants([]);
+      setLoading(false);
+      setError(null);
+      setShowManualInput(false);
+      setManualAddress('');
+      setManualLat('');
+      setManualLng('');
+      setSearch('');
+      setSearchResults([]);
+      setUserLocation(null);
+      setLocationChoiceMade(false);
+      setSelectionMode(false);
+      setSelectedRestaurants([]);
+      setIsAnalyzing(false);
+      setAnalysisResults([]);
+      setShowResults(false);
+    };
+    
+    resetState();
+    
+    // Optional cleanup when component unmounts
+    return () => {
+      // Any cleanup if needed
+    };
+  }, []); // Empty dependency array means this runs once on mount
 
   useEffect(() => {
     if (locationChoiceMade && !showManualInput && restaurants.length === 0) {
       loadRestaurants();
     }
-  }, [locationChoiceMade, showManualInput]);
+  }, [locationChoiceMade, showManualInput, restaurants.length]);
 
   const geocodeAddress = async (address) => {
     try {
@@ -102,6 +145,7 @@ export default function ResultsScreen() {
       if (status !== 'granted') {
         setError('Location permission denied. You can manually enter your location below.');
         setShowManualInput(true);
+        setLocationChoiceMade(false); // Reset location choice
         setLoading(false);
         return;
       }
@@ -112,6 +156,7 @@ export default function ResultsScreen() {
       if (!providerStatus.locationServicesEnabled) {
         setError('Location services are disabled. You can manually enter your location below.');
         setShowManualInput(true);
+        setLocationChoiceMade(false); // Reset location choice
         setLoading(false);
         return;
       }
@@ -120,11 +165,20 @@ export default function ResultsScreen() {
       let location;
       
       try {
-        location = await Location.getCurrentPositionAsync({
+        // Add a timeout to the location request
+        const locationPromise = Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
-          timeout: 10000, // 10 seconds timeout
         });
+        
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Location request timed out')), 15000) // 15 seconds timeout
+        );
+        
+        // Race the location request against the timeout
+        location = await Promise.race([locationPromise, timeoutPromise]);
       } catch (locationError) {
+        console.log('Location error:', locationError);
         
         // Try to get last known location as fallback
         try {
@@ -134,14 +188,17 @@ export default function ResultsScreen() {
           });
           
           if (location) {
+            console.log('Using last known location');
           }
         } catch (lastKnownError) {
+          console.log('Last known location error:', lastKnownError);
         }
         
         // If all else fails, offer manual input
         if (!location) {
           setError('Unable to get your location automatically. Please enter your location manually below.');
           setShowManualInput(true);
+          setLocationChoiceMade(false); // Reset location choice
           setLoading(false);
           return;
         }
@@ -149,12 +206,20 @@ export default function ResultsScreen() {
 
       // Proceed with restaurant search
       const nearbyRestaurants = await getNearbyRestaurants(location.coords);
-      setRestaurants(nearbyRestaurants);
-      setUserLocation(location.coords);
-      setSearchResults([]); // Reset search results
+      
+      if (nearbyRestaurants && nearbyRestaurants.length > 0) {
+        setRestaurants(nearbyRestaurants);
+        setUserLocation(location.coords);
+        setSearchResults([]); // Reset search results
+      } else {
+        setError('No restaurants found near your location. Try a different location.');
+        setLocationChoiceMade(false); // Reset location choice if no restaurants found
+      }
       
     } catch (error) {
+      console.error('Failed to load restaurants:', error);
       setError(`Failed to load restaurants: ${error.message}`);
+      setLocationChoiceMade(false); // Reset location choice on error
     } finally {
       setLoading(false);
     }
@@ -190,8 +255,79 @@ export default function ResultsScreen() {
   // Show searchResults if searching, otherwise all restaurants
   const filteredRestaurants = search ? searchResults : restaurants;
 
-  const renderRestaurant = ({ item }) => (
-    <RestaurantListItem restaurant={item} />
+  // Toggle restaurant selection for batch analysis
+  const toggleRestaurantSelection = (restaurant) => {
+    setSelectedRestaurants(prev => {
+      const isSelected = prev.some(r => r.id === restaurant.id);
+      
+      if (isSelected) {
+        return prev.filter(r => r.id !== restaurant.id);
+      } else {
+        if (prev.length >= 5) {
+          Alert.alert('Selection Limit', 'You can select up to 5 restaurants for batch analysis.');
+          return prev;
+        }
+        return [...prev, restaurant];
+      }
+    });
+  };
+
+  // Start batch analysis
+  const startBatchAnalysis = async () => {
+    if (selectedRestaurants.length === 0) {
+      Alert.alert('No Selection', 'Please select at least one restaurant to analyze.');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setShowResults(false);
+
+    try {
+      const results = await analyzeSelectedRestaurants(
+        selectedRestaurants,
+        vegCriteria,
+        (progress) => {
+          // Could show progress here if needed
+        }
+      );
+
+      if (results.success) {
+        setAnalysisResults(results.results);
+        setShowResults(true);
+        setSelectionMode(false);
+        setSelectedRestaurants([]);
+      } else {
+        Alert.alert('Analysis Error', results.error || 'Failed to analyze restaurants');
+      }
+    } catch (error) {
+      Alert.alert('Analysis Error', error.message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Cancel selection mode
+  const cancelSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedRestaurants([]);
+    setShowResults(false);
+  };
+
+  const renderRestaurant = ({ item }) => {
+    if (selectionMode) {
+      return (
+        <SelectableRestaurantItem
+          restaurant={item}
+          isSelected={selectedRestaurants.some(r => r.id === item.id)}
+          onToggle={() => toggleRestaurantSelection(item)}
+        />
+      );
+    }
+    return <RestaurantListItem restaurant={item} />;
+  };
+
+  const renderAnalysisResult = ({ item }) => (
+    <RestaurantAnalysisResult result={item} vegCriteria={vegCriteria} />
   );
 
   const renderManualLocationInput = () => (
@@ -208,6 +344,7 @@ export default function ResultsScreen() {
         <Button
           title="← Back"
           onPress={() => {
+            // Reset all manual input related state
             setLoading(false);
             setError(null);
             setManualAddress('');
@@ -215,6 +352,9 @@ export default function ResultsScreen() {
             setManualLng('');
             setShowManualInput(false);
             setLocationChoiceMade(false);
+            setRestaurants([]);
+            setUserLocation(null);
+            setSearchResults([]);
           }}
           variant="text"
           style={styles.backButton}
@@ -278,7 +418,7 @@ export default function ResultsScreen() {
             <Button
               title="Try Auto-Location Again"
               onPress={() => {
-                setLoading(false);
+                setLoading(true); // Set loading before attempting to load restaurants
                 setError(null);
                 setManualAddress('');
                 setManualLat('');
@@ -307,6 +447,7 @@ export default function ResultsScreen() {
               onPress={() => {
                 setLocationChoiceMade(true);
                 setShowManualInput(false);
+                setLoading(true); // Set loading before location fetch
               }}
               variant="primary"
               style={styles.locationChoiceButton}
@@ -314,12 +455,17 @@ export default function ResultsScreen() {
             <Button
               title="Enter Location Manually"
               onPress={() => {
+                // Reset all state before showing manual input
                 setLoading(false);
                 setError(null);
                 setManualAddress('');
                 setManualLat('');
                 setManualLng('');
                 setShowManualInput(true);
+                setLocationChoiceMade(false);
+                setRestaurants([]);
+                setUserLocation(null);
+                setSearchResults([]);
                 // Do NOT setLocationChoiceMade(true) here
               }}
               variant="outline"
@@ -400,8 +546,19 @@ export default function ResultsScreen() {
           <Button
             title="←"
             onPress={() => {
+              // Reset all state variables to allow a new search
               setLocationChoiceMade(false);
               setShowManualInput(false);
+              setRestaurants([]);
+              setLoading(false);
+              setError(null);
+              setUserLocation(null);
+              setSearchResults([]);
+              // Reset batch analysis state
+              setSelectionMode(false);
+              setSelectedRestaurants([]);
+              setShowResults(false);
+              setAnalysisResults([]);
             }}
             variant="text"
             style={styles.headerBackButton}
@@ -412,6 +569,12 @@ export default function ResultsScreen() {
               {restaurants.length} restaurants found
             </Text>
           </View>
+          <Button
+            title="📚"
+            onPress={() => router.push('/saved-restaurants')}
+            variant="text"
+            style={styles.savedReportsButton}
+          />
         </View>
         <View style={styles.searchBarContainer}>
           <TextInput
@@ -422,14 +585,109 @@ export default function ResultsScreen() {
             placeholderTextColor={Colors.text.muted}
             returnKeyType="search"
           />
+          {!selectionMode && !showResults && (
+            <Button
+              title="Batch Analyze"
+              onPress={() => setSelectionMode(true)}
+              variant="outline"
+              size="small"
+              style={styles.batchAnalyzeButton}
+            />
+          )}
+          {selectionMode && (
+            <Button
+              title="Cancel"
+              onPress={cancelSelectionMode}
+              variant="text"
+              size="small"
+              style={styles.cancelButton}
+            />
+          )}
+          {showResults && (
+            <Button
+              title="← Back to List"
+              onPress={() => {
+                setShowResults(false);
+                setAnalysisResults([]);
+              }}
+              variant="text"
+              size="small"
+              style={styles.backToListButton}
+            />
+          )}
         </View>
-        <FlatList
-          data={filteredRestaurants}
-          renderItem={renderRestaurant}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-          showsVerticalScrollIndicator={false}
-        />
+
+        {/* Selection Mode Header */}
+        {selectionMode && (
+          <View style={styles.selectionHeader}>
+            <Text style={styles.selectionTitle}>
+              Select restaurants to analyze ({selectedRestaurants.length}/5)
+            </Text>
+            <Text style={styles.selectionSubtitle}>
+              Choose up to 5 restaurants for detailed vegetarian analysis
+            </Text>
+          </View>
+        )}
+
+        {/* Analysis Results Header */}
+        {showResults && (
+          <View style={styles.resultsHeader}>
+            <Text style={styles.resultsTitle}>
+              Analysis Results ({analysisResults.length} restaurants)
+            </Text>
+            <Text style={styles.resultsSubtitle}>
+              Analyzed for "{vegCriteria}" vegetarian standard
+            </Text>
+          </View>
+        )}
+
+        {/* Restaurant List or Analysis Results */}
+        {showResults ? (
+          <FlatList
+            data={analysisResults}
+            renderItem={renderAnalysisResult}
+            keyExtractor={(item) => item.restaurant.id}
+            contentContainerStyle={styles.listContainer}
+            showsVerticalScrollIndicator={false}
+          />
+        ) : (
+          <FlatList
+            data={filteredRestaurants}
+            renderItem={renderRestaurant}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={[
+              styles.listContainer,
+              selectionMode && selectedRestaurants.length > 0 && styles.listContainerWithButton
+            ]}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+
+        {/* Batch Analysis Button */}
+        {selectionMode && selectedRestaurants.length > 0 && (
+          <View style={styles.batchActionContainer}>
+            <Button
+              title={isAnalyzing ? 'Analyzing...' : `Analyze ${selectedRestaurants.length} Restaurant${selectedRestaurants.length === 1 ? '' : 's'}`}
+              onPress={startBatchAnalysis}
+              variant="primary"
+              disabled={isAnalyzing}
+              style={styles.batchActionButton}
+            />
+          </View>
+        )}
+
+        {/* Loading Overlay for Analysis */}
+        {isAnalyzing && (
+          <View style={styles.loadingOverlay}>
+            <Card style={styles.loadingCard}>
+              <LoadingIndicator size="large" />
+              <Text style={styles.loadingText}>Analyzing restaurants...</Text>
+              <Text style={styles.loadingSubtext}>
+                This may take a few moments as we analyze each menu
+              </Text>
+            </Card>
+          </View>
+        )}
       </SafeAreaView>
     );
   }
@@ -471,6 +729,10 @@ const styles = StyleSheet.create({
   
   listContainer: {
     padding: Spacing.list.containerPadding,
+  },
+  
+  listContainerWithButton: {
+    paddingBottom: 100, // Space for floating button
   },
   
   errorContainer: {
@@ -607,8 +869,11 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.sm,
     backgroundColor: Colors.background.secondary,
+    flexDirection: 'row',
+    gap: Spacing.sm,
   },
   searchBar: {
+    flex: 1,
     backgroundColor: Colors.background.primary,
     borderRadius: 8,
     borderWidth: 1,
@@ -617,6 +882,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: Typography.body.fontSize,
     color: Colors.text.primary,
+  },
+  advancedSearchButton: {
+    paddingHorizontal: Spacing.md,
   },
   errorCardWrapper: {
     marginTop: Spacing.xl,
@@ -661,8 +929,120 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
   },
+  
+  savedReportsButton: {
+    marginLeft: Spacing.md,
+    marginRight: -8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  
   headerContent: {
     flex: 1,
     alignItems: 'center',
+  },
+  
+  // Batch analysis styles
+  batchAnalyzeButton: {
+    paddingHorizontal: Spacing.md,
+  },
+  
+  cancelButton: {
+    paddingHorizontal: Spacing.sm,
+  },
+  
+  backToListButton: {
+    paddingHorizontal: Spacing.sm,
+  },
+  
+  selectionHeader: {
+    backgroundColor: Colors.primary[50] || Colors.background.secondary,
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border.light,
+  },
+  
+  selectionTitle: {
+    ...Typography.h6,
+    color: Colors.text.primary,
+    fontWeight: Typography.fontWeight.bold,
+  },
+  
+  selectionSubtitle: {
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginTop: Spacing.xs,
+  },
+  
+  resultsHeader: {
+    backgroundColor: Colors.success + '20',
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border.light,
+  },
+  
+  resultsTitle: {
+    ...Typography.h6,
+    color: Colors.text.primary,
+    fontWeight: Typography.fontWeight.bold,
+  },
+  
+  resultsSubtitle: {
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    marginTop: Spacing.xs,
+  },
+  
+  batchActionContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: Colors.background.primary,
+    padding: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border.light,
+    shadowColor: Colors.shadow.medium,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+  
+  batchActionButton: {
+    width: '100%',
+  },
+  
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: Colors.overlay,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  
+  loadingCard: {
+    margin: Spacing.lg,
+    padding: Spacing.xl,
+    alignItems: 'center',
+    maxWidth: 300,
+  },
+  
+  loadingText: {
+    ...Typography.h6,
+    color: Colors.text.primary,
+    textAlign: 'center',
+    marginTop: Spacing.md,
+  },
+  
+  loadingSubtext: {
+    ...Typography.bodySmall,
+    color: Colors.text.secondary,
+    textAlign: 'center',
+    marginTop: Spacing.sm,
   },
 }); 

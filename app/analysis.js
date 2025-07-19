@@ -1,24 +1,27 @@
 import * as Linking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Alert, Platform, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import LoadingIndicator from '../components/LoadingIndicator';
 import MenuResults from '../components/MenuResults';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
-import Colors from '../constants/Colors';
-import Spacing from '../constants/Spacing';
-import Typography from '../constants/Typography';
+import { Colors } from '../constants/Colors';
+import { Spacing } from '../constants/Spacing';
+import { Typography } from '../constants/Typography';
 import { analyzeRestaurantWebsite } from '../services/googleMapsService';
+import savedReportsService from '../services/savedReportsService';
 
 export default function AnalysisScreen() {
-  const { name, id } = useLocalSearchParams();
+  const { name, id, vicinity, regenerate } = useLocalSearchParams();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [analysisStage, setAnalysisStage] = useState('idle');
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
+  const [isSaved, setIsSaved] = useState(false);
+  const [savingReport, setSavingReport] = useState(false);
   const [progress, setProgress] = useState({
     restaurantDetails: false,
     websiteScraping: false,
@@ -128,6 +131,95 @@ export default function AnalysisScreen() {
     handleAnalyzeMenu();
   };
 
+  const handleSaveReport = async () => {
+    if (!results) return;
+    
+    try {
+      setSavingReport(true);
+      
+      const reportData = {
+        restaurant: {
+          id: id,
+          name: name,
+          vicinity: vicinity || results.restaurantInfo?.vicinity || '',
+          rating: results.restaurantInfo?.rating,
+          priceLevel: results.restaurantInfo?.priceLevel,
+          location: results.restaurantInfo?.location,
+          website: results.restaurantInfo?.website,
+        },
+        analysis: {
+          // Complete analysis results
+          vegFriendliness: results.overallRating,
+          vegetarianCount: results.vegetarianItems?.length || 0,
+          totalItems: results.totalItems || 0,
+          summary: results.menuAnalysis?.summary || '',
+          confidence: results.confidence || 0,
+          recommendations: results.recommendations || [],
+          
+          // Full vegetarian items data
+          vegetarianItems: results.vegetarianItems || [],
+          enhancedMenuItems: results.enhancedMenuItems || [],
+          
+          // Additional analysis data
+          menuAnalysis: results.menuAnalysis,
+          scrapingInfo: results.scrapingInfo,
+          analysisDate: results.analysisDate,
+        },
+        vegCriteria: 'standard', // Could be made dynamic
+        savedAt: new Date().toISOString(),
+      };
+
+      await savedReportsService.saveRestaurantReport(reportData);
+      setIsSaved(true);
+      
+      Alert.alert(
+        'Report Saved! 🎉',
+        'This restaurant analysis has been bookmarked and will appear on your home screen. Tap the 📚 icon in the top-right of restaurant lists to quickly access all your saved reports.',
+        [{ text: 'Got it!' }]
+      );
+    } catch (error) {
+      console.error('Error saving report:', error);
+      Alert.alert('Save Failed', 'Could not save the restaurant report. Please try again.');
+    } finally {
+      setSavingReport(false);
+    }
+  };
+
+  const handleRemoveSavedReport = async () => {
+    try {
+      setSavingReport(true);
+      await savedReportsService.removeSavedReportByRestaurant(id);
+      setIsSaved(false);
+      
+      Alert.alert(
+        'Report Removed',
+        'This restaurant report has been removed from your bookmarks.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error removing report:', error);
+      Alert.alert('Remove Failed', 'Could not remove the saved report. Please try again.');
+    } finally {
+      setSavingReport(false);
+    }
+  };
+
+  // Check if report is already saved
+  useEffect(() => {
+    const checkSavedStatus = async () => {
+      if (id) {
+        try {
+          const hasSaved = await savedReportsService.hasSavedReport(id);
+          setIsSaved(hasSaved);
+        } catch (error) {
+          console.error('Error checking saved status:', error);
+        }
+      }
+    };
+    
+    checkSavedStatus();
+  }, [id, results]);
+
   const getProgressText = () => {
     if (progress.complete) {
       return loading ? 'Finalizing results...' : 'Analysis complete';
@@ -178,19 +270,43 @@ export default function AnalysisScreen() {
         </TouchableOpacity>
         <View style={styles.headerContent}>
           <Text style={styles.title}>Menu Analysis</Text>
-          <Text style={styles.restaurantName}>{name}</Text>
+          <Text style={styles.restaurantName} numberOfLines={1} ellipsizeMode="tail">
+            {name}
+          </Text>
         </View>
       </View>
-      {/* Get Directions Button */}
+      {/* Action Buttons */}
       {results && results.restaurantInfo && (
-        <View style={styles.directionsButtonContainer}>
-          <Button
-            title="Get Directions"
+        <View style={styles.actionButtonsContainer}>
+          <TouchableOpacity 
+            style={styles.actionButton}
             onPress={handleGetDirections}
-            variant="primary"
-            size="medium"
-            style={styles.directionsButton}
-          />
+            activeOpacity={0.8}
+          >
+            <View style={styles.buttonContent}>
+              <Text style={styles.buttonIcon}>🧭</Text>
+              <Text style={styles.buttonText}>Get Directions</Text>
+            </View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[
+              styles.actionButton,
+              savingReport && styles.buttonDisabled
+            ]}
+            onPress={isSaved ? handleRemoveSavedReport : handleSaveReport}
+            disabled={savingReport}
+            activeOpacity={0.8}
+          >
+            <View style={styles.buttonContent}>
+              <Text style={styles.buttonIcon}>
+                {savingReport ? '⏳' : isSaved ? '✅' : '🔖'}
+              </Text>
+              <Text style={styles.buttonText}>
+                {savingReport ? 'Saving...' : isSaved ? 'Saved!' : 'Save Report'}
+              </Text>
+            </View>
+          </TouchableOpacity>
         </View>
       )}
       <View style={styles.content}>
@@ -235,44 +351,48 @@ const styles = StyleSheet.create({
   
   header: {
     backgroundColor: Colors.primary[500],
-    paddingVertical: Spacing.header.paddingVertical,
-    paddingHorizontal: Spacing.header.paddingHorizontal,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
     shadowColor: Colors.shadow.medium,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 4,
     elevation: 4,
-    paddingTop: Platform.select({ ios: 12, android: 24, default: 0 }),
+    paddingTop: 60, // Extra padding for camera cutout clearance
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 70,
   },
   
   title: {
-    ...Typography.h3,
-    color: Colors.text.inverse,
-    textAlign: 'center',
-  },
-  
-  restaurantName: {
     ...Typography.body,
     color: Colors.text.inverse,
     textAlign: 'center',
-    marginTop: Spacing.xs,
+    fontWeight: Typography.fontWeight.bold,
+    fontSize: 16,
+  },
+  
+  restaurantName: {
+    ...Typography.bodySmall,
+    color: Colors.text.inverse,
+    textAlign: 'center',
     opacity: 0.9,
+    marginTop: 2,
   },
 
   backButton: {
     position: 'absolute',
-    left: 12,
-    top: Platform.select({ ios: 12, android: 24, default: 0 }),
-    zIndex: 2,
+    left: 16,
+    top: 45, // Positioned higher in the header
     padding: 8,
+    zIndex: 10, // Ensure it's visible above other elements
   },
   backButtonText: {
-    fontSize: 28,
+    fontSize: 22,
     color: Colors.text.inverse,
     fontWeight: 'bold',
   },
+  
   headerContent: {
     flex: 1,
     alignItems: 'center',
@@ -311,12 +431,51 @@ const styles = StyleSheet.create({
   retryButton: {
     marginTop: Spacing.sm,
   },
-  directionsButtonContainer: {
+  
+  actionButtonsContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 12,
     marginBottom: 8,
+    paddingHorizontal: Spacing.md,
+    gap: Spacing.sm,
   },
-  directionsButton: {
-    width: 180,
+  
+  actionButton: {
+    flex: 1,
+    maxWidth: 160,
+    height: 48,
+    backgroundColor: Colors.success,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: Colors.shadow.medium,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  
+  buttonDisabled: {
+    opacity: 0.6,
+    backgroundColor: Colors.background.tertiary,
+  },
+  
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+  },
+  
+  buttonIcon: {
+    fontSize: 18,
+  },
+  
+  buttonText: {
+    ...Typography.bodySmall,
+    color: Colors.text.inverse,
+    fontWeight: Typography.fontWeight.bold,
   },
 }); 

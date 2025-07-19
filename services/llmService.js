@@ -31,16 +31,73 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       };
     }
 
-    // First, analyze menu items for vegetarian options
-    // Create a focused prompt for vegetarian analysis of scraped menu (no batching)
-    const prompt = createScrapedMenuAnalysisPrompt(menuItems, restaurantName);
-    const analysisResult = await callGeminiAPI(prompt, apiKey);
+    // First, analyze menu items for vegetarian options with batching
+    console.log(`[WebScraping] Analyzing ${menuItems.length} menu items from "${restaurantName}" for vegetarian options...`);
     
+    // Use batching for initial analysis to handle large menus
+    const analysisBatchSize = 75; // Increased batch size for initial analysis
+    const analysisBatches = splitIntoBatches(menuItems, analysisBatchSize);
+    console.log(`[DEBUG] Split ${menuItems.length} menu items into ${analysisBatches.length} batches of up to ${analysisBatchSize} items each for analysis`);
+    
+    const analysisResults = [];
+    let successfulAnalysisBatches = 0;
+    
+    // Process each analysis batch
+    for (let i = 0; i < analysisBatches.length; i++) {
+      const currentBatch = analysisBatches[i];
+      console.log(`[DEBUG] Analyzing batch ${i+1}/${analysisBatches.length} with ${currentBatch.length} menu items`);
+      
+      const batchPrompt = createScrapedMenuAnalysisPrompt(currentBatch, restaurantName);
+      console.log(`[DEBUG] Analysis batch ${i+1} prompt length: ${batchPrompt.length} characters`);
+      
+      // Try to analyze this batch with retry logic
+      let batchResult = null;
+      let retryCount = 0;
+      const maxRetries = 2; // Two retries for analysis
+      
+      while (retryCount <= maxRetries && !batchResult?.success) {
+        if (retryCount > 0) {
+          console.log(`[Gemini] Analysis retry for batch ${i+1}...`);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        
+        batchResult = await callGeminiAPI(batchPrompt, apiKey);
+        retryCount++;
+      }
+      
+      if (batchResult?.success) {
+        console.info(`[Gemini] Analysis batch ${i+1} successful using ${batchResult.model || 'API'}`);
+        const batchAnalysis = parseScrapedMenuAnalysis(batchResult.content, currentBatch);
+        analysisResults.push(batchAnalysis);
+        successfulAnalysisBatches++;
+      } else {
+        console.warn(`[Gemini] Analysis batch ${i+1} failed:`, batchResult?.error || 'Unknown error');
+        // Add empty result for failed batch
+        analysisResults.push({
+          vegetarianItems: [],
+          summary: `Analysis failed for batch ${i+1}`,
+          restaurantVegFriendliness: 'unknown',
+          totalItems: currentBatch.length,
+          confidence: 0.0,
+          recommendations: []
+        });
+      }
+      
+      // Delay between analysis batches to avoid rate limiting
+      if (i < analysisBatches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+      }
+    }
+    
+    console.log(`[DEBUG] Analysis complete. ${successfulAnalysisBatches}/${analysisBatches.length} analysis batches processed successfully`);
+    
+    // Aggregate all analysis results
     let vegetarianAnalysis = null;
-    if (analysisResult.success) {
-      vegetarianAnalysis = parseScrapedMenuAnalysis(analysisResult.content, menuItems);
+    if (successfulAnalysisBatches > 0) {
+      vegetarianAnalysis = aggregateBatchResults(analysisResults);
+      console.log(`[DEBUG] Aggregated analysis: ${vegetarianAnalysis.vegetarianItems.length} vegetarian items, ${vegetarianAnalysis.restaurantVegFriendliness} friendliness`);
     } else {
-      throw new Error(`Gemini API error: ${analysisResult.error}`);
+      throw new Error('All analysis batches failed - unable to identify vegetarian options');
     }
     
     // Now, try to enhance only the vegetarian items (non-blocking for overall function)
@@ -57,10 +114,10 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
         };
       }
       
-      console.log(`[WebScraping] Enhancing ${vegetarianItemsToEnhance.length} vegetarian items from "${restaurantName}" with AI...`);
+      console.log(`[WebScraping] Enhancing ${vegetarianItemsToEnhance.length} vegetarian items with AI...`);
       
       // Use batching for enhancement to avoid token limits
-      const batchSize = 25; // Larger batch size for efficiency while still maintaining reliability
+      const batchSize = 75; // Increased batch size for efficiency
       const batches = splitIntoBatches(vegetarianItemsToEnhance, batchSize);
       console.log(`[DEBUG] Split ${vegetarianItemsToEnhance.length} vegetarian items into ${batches.length} batches of up to ${batchSize} items each`);
       
@@ -78,8 +135,8 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
         const currentBatch = batches[i];
         console.log(`[DEBUG] Processing batch ${i+1}/${batches.length} with ${currentBatch.length} vegetarian items`);
         
-        // Create a prompt for this batch
-        const batchPrompt = createMenuEnhancementPrompt(currentBatch, restaurantName || 'Restaurant');
+        // Create a prompt for this batch (no restaurant name for each batch)
+        const batchPrompt = createMenuEnhancementPrompt(currentBatch);
         console.log(`[DEBUG] Batch ${i+1} prompt length: ${batchPrompt.length} characters`);
         
         // Try to enhance this batch with a single retry
@@ -120,6 +177,9 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
         // Create a copy of all menu items, we'll only update the vegetarian ones
         const resultItems = [...menuItems];
         
+        // Log comprehensive restaurant analysis once at the end
+        console.log(`[WebScraping] Completed analysis for "${restaurantName}" - Found ${vegetarianAnalysis.vegetarianItems.length} vegetarian items with ${vegetarianAnalysis.restaurantVegFriendliness} friendliness rating`);
+        
         // Apply enhancements only to vegetarian items
         enhancedVegetarianItems.forEach(enhancedItem => {
           // Skip items that don't have a name or originalName
@@ -155,9 +215,14 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       // If enhancement fails, we still continue with original items
     }
     
+    // Generate a concise restaurant summary with all collected data
+    const finalSummary = `${restaurantName}: ${vegetarianAnalysis.summary} Vegetarian-friendliness: ${vegetarianAnalysis.restaurantVegFriendliness.toUpperCase()}.`;
+    console.log(`[WebScraping] Analysis complete for "${restaurantName}": ${finalSummary}`);
+    
     // Return both the vegetarian analysis and enhanced items
     return {
       ...vegetarianAnalysis,
+      summary: finalSummary,
       enhancedMenuItems: enhancedItems
     };
   } catch (error) {
@@ -257,29 +322,47 @@ const splitIntoBatches = (arr, batchSize) => {
 const aggregateBatchResults = (batchResults) => {
   const allVegetarianItems = batchResults.flatMap(r => r.vegetarianItems || []);
   const allRecommendations = batchResults.flatMap(r => r.recommendations || []);
-  const summaries = batchResults.map(r => r.summary).filter(Boolean);
   const confidences = batchResults.map(r => r.confidence).filter(c => typeof c === 'number');
   const totalItems = batchResults.reduce((sum, r) => sum + (r.totalItems || 0), 0);
-  // Use the 'worst' friendliness (limited < fair < good < excellent)
+  
+  // Calculate average confidence
+  const avgConfidence = confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : 0.5;
+  
+  // Determine overall vegetarian friendliness based on percentage and count
+  const vegetarianCount = allVegetarianItems.length;
+  const vegetarianPercentage = totalItems > 0 ? (vegetarianCount / totalItems) * 100 : 0;
+  
+  let overallFriendliness = 'limited';
+  if (vegetarianPercentage >= 40 && vegetarianCount >= 5) {
+    overallFriendliness = 'excellent';
+  } else if (vegetarianPercentage >= 30 && vegetarianCount >= 3) {
+    overallFriendliness = 'good';
+  } else if (vegetarianPercentage >= 20 && vegetarianCount >= 2) {
+    overallFriendliness = 'fair';
+  }
+  
+  // If any batch reported a higher friendliness, consider it (be optimistic)
   const friendlinessOrder = ['limited', 'fair', 'good', 'excellent'];
-  let friendliness = 'unknown';
   for (const r of batchResults) {
     if (r.restaurantVegFriendliness && friendlinessOrder.includes(r.restaurantVegFriendliness)) {
-      if (
-        friendliness === 'unknown' ||
-        friendlinessOrder.indexOf(r.restaurantVegFriendliness) < friendlinessOrder.indexOf(friendliness)
-      ) {
-        friendliness = r.restaurantVegFriendliness;
+      const currentIndex = friendlinessOrder.indexOf(overallFriendliness);
+      const batchIndex = friendlinessOrder.indexOf(r.restaurantVegFriendliness);
+      if (batchIndex > currentIndex) {
+        overallFriendliness = r.restaurantVegFriendliness;
       }
     }
   }
+  
+  // Create concise summary (instead of joining all batch summaries)
+  const aggregatedSummary = `Found ${vegetarianCount} vegetarian options out of ${totalItems} total items (${Math.round(vegetarianPercentage)}%).`;
+  
   return {
     vegetarianItems: allVegetarianItems,
-    summary: summaries.join(' '),
-    restaurantVegFriendliness: friendliness,
+    summary: aggregatedSummary,
+    restaurantVegFriendliness: overallFriendliness,
     totalItems,
-    confidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : 0.5,
-    recommendations: Array.from(new Set(allRecommendations)),
+    confidence: avgConfidence,
+    recommendations: Array.from(new Set(allRecommendations)), // Remove duplicates
   };
 };
 
@@ -476,7 +559,6 @@ RESPONSE FORMAT (JSON):
       "explicitlyMarked": true/false
     }
   ],
-  "summary": "Brief summary of vegetarian options available",
   "restaurantVegFriendliness": "excellent|good|fair|limited",
   "totalItems": 12,
   "confidence": 0.85,
@@ -496,10 +578,9 @@ Please respond ONLY with valid JSON.`;
 /**
  * Creates a prompt for enhancing menu items with Gemini
  * @param {Array} menuItems - Array of scraped menu items
- * @param {string} restaurantName - Name of the restaurant
  * @returns {string} Formatted prompt for Gemini API
  */
-const createMenuEnhancementPrompt = (menuItems, restaurantName) => {
+const createMenuEnhancementPrompt = (menuItems) => {
   // Check if menuItems is array and has items
   if (!Array.isArray(menuItems)) {
     console.error('[Gemini] createMenuEnhancementPrompt received non-array menuItems:', typeof menuItems);
@@ -520,14 +601,14 @@ const createMenuEnhancementPrompt = (menuItems, restaurantName) => {
     return { name: item.name || 'Unknown Item' };
   });
   
-  console.log(`[DEBUG] Creating prompt with ${simplifiedItems.length} items and restaurant name "${restaurantName || 'Unknown Restaurant'}"`);
+  console.log(`[DEBUG] Creating prompt with ${simplifiedItems.length} items`);
   
   // Calculate prompt size for logging
   const itemsJson = JSON.stringify(simplifiedItems, null, 2);
   console.log(`[DEBUG] Items JSON size: ${itemsJson.length} characters`);
   
   // Even more simplified prompt to minimize token usage
-  return `For vegetarian menu items from "${restaurantName || 'Restaurant'}", enhance these items:
+  return `Enhance these vegetarian menu items:
 ${itemsJson}
 
 Return valid JSON with fixed item names and categories (appetizer, entree, side, dessert, beverage, other), remove any unnecessary symbols and correct words:
@@ -630,7 +711,8 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
         isVegan: !!item.isVegan,
         explicitlyMarked: !!item.explicitlyMarked
       })) : [],
-      summary: parsed.summary || 'Scraped menu analysis completed.',
+      // No longer requesting summary from LLM, just set a placeholder
+      summary: '',
       restaurantVegFriendliness: parsed.restaurantVegFriendliness || 'fair',
       totalItems: parsed.totalItems || parsed.vegetarianItems?.length || 0,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
@@ -646,7 +728,7 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
     // Manual extraction fallback
     return {
       vegetarianItems: [],
-      summary: 'Failed to parse analysis results. Please check API configuration.',
+      summary: '',
       restaurantVegFriendliness: 'unknown',
       totalItems: menuItems.length,
       confidence: 0.0,

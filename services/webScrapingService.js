@@ -1,5 +1,4 @@
 import axios from 'axios';
-import { Platform } from 'react-native';
 
 /**
  * Scrape restaurant menu from website
@@ -214,34 +213,21 @@ const scrapeMenuPage = async (url) => {
 };
 
 /**
- * Fetch page content (with platform-specific approach)
+ * Fetch page content (using CORS proxy for all platforms)
  * @param {string} url - URL to fetch
  * @returns {Promise<string>} HTML content
  */
 const fetchPageContent = async (url) => {
   try {
-    if (Platform.OS === 'web') {
-      // Web platform - use CORS proxy
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(proxyUrl, {
-        timeout: 15000,
-        headers: { 'Accept': 'application/json' }
-      });
-      return response.data?.contents || null;
-    } else {
-      // Mobile platform - direct request
-      const response = await axios.get(url, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Connection': 'keep-alive'
-        }
-      });
-      return response.data || null;
-    }
+    // Use CORS proxy for all platforms to ensure consistent behavior
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const response = await axios.get(proxyUrl, {
+      timeout: 15000,
+      headers: { 'Accept': 'application/json' }
+    });
+    return response.data?.contents || null;
   } catch (error) {
+    console.error('Fetch error:', error.message, 'URL:', url);
     return null;
   }
 };

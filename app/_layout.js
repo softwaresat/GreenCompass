@@ -40,6 +40,18 @@ export default function Layout() {
             title: 'Menu Analysis',
           }} 
         />
+        <Stack.Screen 
+          name="saved-restaurants" 
+          options={{ 
+            title: 'Saved Restaurants',
+          }} 
+        />
+        <Stack.Screen 
+          name="saved-analysis" 
+          options={{ 
+            title: 'Saved Analysis',
+          }} 
+        />
       </Stack>
     </>
   );
