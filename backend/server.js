@@ -3,15 +3,14 @@
  * Optimized for weak servers with minimal resource usage
  */
 
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
 import compression from 'compression';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
+import cors from 'cors';
+import express from 'express';
+import helmet from 'helmet';
 
-import { scrapeWithMinimalPlaywright, getPlaywrightHealth } from './services/playwrightScraper.js';
-import { validateUrl } from './utils/validation.js';
 import { errorHandler, requestLogger } from './middleware/index.js';
+import { getPlaywrightHealth, scrapeWithMinimalPlaywright } from './services/playwrightScraper.js';
+import { validateUrl } from './utils/validation.js';
 
 const app = express();
 // Server configuration
