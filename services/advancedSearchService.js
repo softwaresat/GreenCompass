@@ -220,7 +220,7 @@ const performDetailedVegAnalysis = async (restaurant) => {
     const menuData = await Promise.race([
       scrapeRestaurantMenu(details.website),
       new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Menu scraping timeout')), 15000)
+        setTimeout(() => reject(new Error('Menu scraping timeout')), 60000)
       )
     ]);
     
