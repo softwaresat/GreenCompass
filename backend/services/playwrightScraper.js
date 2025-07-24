@@ -994,6 +994,10 @@ Return ONLY a JSON object:
     // Models to try in order of preference
     const models = [
       {
+        name: 'gemini-2.0-flash-lite',
+        url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`
+      },
+      {
         name: 'gemini-2.5-flash',
         url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`
       },

@@ -26,10 +26,10 @@ async function testScraper() {
       });
       
       if (result.success) {
-        console.log(`✅ Success: Found ${result.totalItems} menu items`);
-        console.log(`💰 With prices: ${result.itemsWithPrices}`);
-        console.log(`⚡ Time: ${result.performance?.totalTime}ms`);
-        console.log(`🔧 Method: ${result.extractionMethod}`);
+        console.log(`✅ Success: Found ${result.menuItems?.length || 0} menu items`);
+        console.log(`💰 With prices: ${result.menuItems?.filter(item => item.price).length || 0}`);
+        console.log(`⚡ Time: ${result.extractionTime}ms`);
+        console.log(`🔧 Method: ${result.discoveryMethod || 'direct'}`);
         
         // Show first few items
         if (result.menuItems && result.menuItems.length > 0) {
@@ -40,7 +40,7 @@ async function testScraper() {
         }
       } else {
         console.log(`❌ Failed: ${result.error}`);
-        console.log(`⏱️  Time: ${result.performance?.totalTime}ms`);
+        console.log(`⏱️  Time: ${result.extractionTime}ms`);
       }
       
     } catch (error) {
