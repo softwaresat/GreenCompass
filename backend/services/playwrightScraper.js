@@ -1039,6 +1039,30 @@ Return maximum 10 sub-menu links, highest confidence first!`;
         }
       } else {
         console.log(`[AI Search] Enhanced AI Search found no menu URLs for: ${currentUrl}`);
+        
+        // If AI found menu-related text but no URLs, try the basic method as backup
+        if (menuSearchResult && menuSearchResult.debugInfo && 
+            (menuSearchResult.debugInfo.foundMenuText?.length > 0 || 
+             menuSearchResult.debugInfo.foundButtons?.length > 0 || 
+             menuSearchResult.debugInfo.foundLinks?.length > 0)) {
+          console.log(`[AI Search] AI found menu-related content but no URLs. Trying basic link extraction as backup...`);
+          const basicLinks = await this.findMenuLinksOnPage(currentUrl, options);
+          if (basicLinks && basicLinks.length > 0) {
+            console.log(`[AI Search] Basic method found ${basicLinks.length} potential menu links`);
+            for (const basicUrl of basicLinks) {
+              if (!visitedUrls.has(basicUrl)) {
+                const testContent = await this.fetchPageContentForAI(basicUrl, options);
+                if (testContent) {
+                  const isMenuResult = await this.checkIfPageIsMenuWithAI(testContent, basicUrl, apiKey);
+                  if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 40) {
+                    console.log(`[AI Search] ✓ Basic method found valid menu page: ${basicUrl} (confidence: ${isMenuResult.confidence}%)`);
+                    return basicUrl;
+                  }
+                }
+              }
+            }
+          }
+        }
       }
       
       // If Enhanced AI Search didn't find dedicated menu pages, check if current page IS a menu
@@ -1230,6 +1254,14 @@ FIND MENU LINKS - Look for these EXACT indicators:
    - Pay special attention to <button> tags with "menu" text
    - Look at onclick handlers that might navigate to menu pages
    - Check data-* attributes that might contain menu URLs
+   - Look for JavaScript navigation patterns like: window.location, href assignments
+   - Check for React Router links or Vue Router links
+
+6. SPECIAL CASES - ALWAYS INCLUDE THESE:
+   - If you see "View Menu" text anywhere, find the associated link/action
+   - Check for menu links in navigation bars, headers, footers
+   - Look for menu buttons in hero sections or main content areas
+   - Search for any clickable element with menu-related text
 
 IGNORE:
 - External ordering platforms (unless they're the ONLY menu option)  
@@ -1238,6 +1270,12 @@ IGNORE:
 - General "About" pages
 
 !!! CRITICAL: If you see ANY element (button, link, div) with the word "menu" in the visible text, that should be your TOP priority suggestion!
+
+DEBUGGING - If you find "View Menu" or similar text but can't find a URL:
+- Look more carefully at the surrounding HTML structure
+- Check for data-href, data-url, or similar attributes
+- Look for JavaScript patterns that might construct URLs
+- Consider that the URL might be built dynamically
 
 PDF HANDLING:
 - If you find PDF menu links, include them but mark as type: "pdf" with confidence 60-70
@@ -1261,6 +1299,11 @@ Return ONLY a JSON object with this structure:
     "hasOrderingSystem": false,
     "hasThirdPartyMenu": false,
     "hasPdfMenu": false
+  },
+  "debugInfo": {
+    "foundMenuText": ["list of menu-related text found"],
+    "foundButtons": ["list of button texts that contain menu"],
+    "foundLinks": ["list of link texts that contain menu"]
   }
 }
 
@@ -1291,6 +1334,13 @@ Return maximum 5 URLs, highest confidence first!`;
       try {
         const parsedResult = JSON.parse(jsonMatch[0]);
         
+        // Debug output
+        if (parsedResult.debugInfo) {
+          console.log(`[Enhanced AI Search Debug] Found menu text: ${JSON.stringify(parsedResult.debugInfo.foundMenuText)}`);
+          console.log(`[Enhanced AI Search Debug] Found buttons: ${JSON.stringify(parsedResult.debugInfo.foundButtons)}`);
+          console.log(`[Enhanced AI Search Debug] Found links: ${JSON.stringify(parsedResult.debugInfo.foundLinks)}`);
+        }
+        
         // Validate and normalize URLs
         if (parsedResult.menuUrls) {
           for (const menuUrl of parsedResult.menuUrls) {
@@ -1311,6 +1361,12 @@ Return maximum 5 URLs, highest confidence first!`;
         }
         
         console.log(`[Enhanced AI Search] Found ${parsedResult.menuUrls?.length || 0} potential menu URLs`);
+        if (parsedResult.menuUrls && parsedResult.menuUrls.length > 0) {
+          parsedResult.menuUrls.forEach((menuUrl, index) => {
+            console.log(`[Enhanced AI Search] URL ${index + 1}: ${menuUrl.url} (confidence: ${menuUrl.confidence}%, reason: ${menuUrl.reason})`);
+          });
+        }
+        
         return parsedResult;
         
       } catch (parseError) {

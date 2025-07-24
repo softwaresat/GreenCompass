@@ -3,7 +3,7 @@
  * Run with: node test-scraper.js
  */
 
-import { scrapeWithMinimalPlaywright } from './services/playwrightScraper.js';
+const scraper = require('./services/playwrightScraper.js');
 
 const testUrls = [
   'https://www.olivegarden.com',
@@ -19,16 +19,15 @@ async function testScraper() {
     console.log(`\n📋 Testing: ${url}`);
     
     try {
-      const result = await scrapeWithMinimalPlaywright(url, {
+      const result = await scraper.findAndScrapeMenu(url, {
         timeout: 15000,
-        mobileViewport: true,
-        blockResources: ['image', 'font', 'media']
+        mobile: true
       });
       
       if (result.success) {
         console.log(`✅ Success: Found ${result.menuItems?.length || 0} menu items`);
         console.log(`💰 With prices: ${result.menuItems?.filter(item => item.price).length || 0}`);
-        console.log(`⚡ Time: ${result.extractionTime}ms`);
+        console.log(`⚡ Time: ${result.extractionTime || result.discoveryTime || 'unknown'}ms`);
         console.log(`🔧 Method: ${result.discoveryMethod || 'direct'}`);
         
         // Show first few items
@@ -40,7 +39,7 @@ async function testScraper() {
         }
       } else {
         console.log(`❌ Failed: ${result.error}`);
-        console.log(`⏱️  Time: ${result.extractionTime}ms`);
+        console.log(`⏱️  Time: ${result.extractionTime || result.discoveryTime || 'unknown'}ms`);
       }
       
     } catch (error) {
@@ -62,10 +61,9 @@ if (args.length > 0) {
   const customUrl = args[0];
   console.log(`🧪 Testing custom URL: ${customUrl}`);
   
-  scrapeWithMinimalPlaywright(customUrl, {
+  scraper.findAndScrapeMenu(customUrl, {
     timeout: 20000,
-    mobileViewport: false,
-    blockResources: ['image', 'font']
+    mobile: false
   })
   .then(result => {
     console.log('Result:', JSON.stringify(result, null, 2));
