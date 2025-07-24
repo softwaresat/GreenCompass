@@ -5,7 +5,7 @@
 
 import axios from 'axios';
 import { getNearbyRestaurants, getRestaurantDetails } from './googleMapsService';
-import { scrapeRestaurantMenu } from './webScrapingService';
+import { scrapeRestaurantMenu } from './webScrapingService.js';
 
 /**
  * Get nearby restaurants for user selection

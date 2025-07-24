@@ -44,18 +44,47 @@ class PlaywrightScraper {
     let discoveryMethod = 'none';
     
     try {
-      // Step 1: Try the original URL first
-      console.log(`📍 Testing original URL: ${url}`);
+      // Step 1: Try the original URL first, but validate with AI
+      console.log(`📍 Testing original URL with AI validation: ${url}`);
       const originalResult = await this.scrapeMenuData(url, { ...options, skipDiscovery: true });
       
       if (originalResult.success && originalResult.menuItems && originalResult.menuItems.length > 0) {
-        console.log(`✅ Menu found on original URL: ${originalResult.menuItems.length} items`);
-        return {
-          ...originalResult,
-          menuPageUrl: url,
-          discoveryMethod: 'original-url',
-          discoveryTime: Date.now() - discoveryStartTime
-        };
+        console.log(`🔍 Found ${originalResult.menuItems.length} items on original URL, validating with AI...`);
+        
+        // Use AI to validate if this is actually a menu page
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey && apiKey !== 'your_gemini_api_key_here') {
+          const htmlContent = await this.fetchPageContentForAI(url, options);
+          if (htmlContent) {
+            const isMenuResult = await this.checkIfPageIsMenuWithAI(htmlContent, url, apiKey);
+            
+            if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 75) {
+              console.log(`✅ AI confirmed original URL is a menu page: ${url} (confidence: ${isMenuResult.confidence}%)`);
+              return {
+                ...originalResult,
+                menuPageUrl: url,
+                discoveryMethod: 'original-url-ai-validated',
+                discoveryTime: Date.now() - discoveryStartTime,
+                aiValidation: {
+                  confidence: isMenuResult.confidence,
+                  reason: isMenuResult.reason
+                }
+              };
+            } else {
+              console.log(`❌ AI determined original URL is NOT a menu page: ${url} (confidence: ${isMenuResult?.confidence || 0}%, reason: ${isMenuResult?.reason || 'unknown'})`);
+              // Continue to AI discovery instead of returning false positive
+            }
+          }
+        } else {
+          console.log(`⚠️ No Gemini API key configured, skipping AI validation for original URL`);
+          // Without AI validation, we'll still return the result but with lower confidence
+          return {
+            ...originalResult,
+            menuPageUrl: url,
+            discoveryMethod: 'original-url-unvalidated',
+            discoveryTime: Date.now() - discoveryStartTime
+          };
+        }
       }
       
       // Step 2: Use AI-powered menu discovery
@@ -874,34 +903,36 @@ Page Content:
 ${sampleText}
 
 Look for these POSITIVE indicators of a MENU PAGE:
-- Food/drink item names (even without prices)
-- Categories like: appetizers, entrees, mains, desserts, drinks, etc.
-- Any prices with currency symbols ($, €, £, etc.)
-- Food descriptions or ingredients
-- Menu-style formatting or lists
-- Restaurant menu terminology${analysisInstructions}
+- ACTUAL food/drink item names with prices (e.g., "Caesar Salad $12.99")
+- Clear menu categories like: appetizers, entrees, mains, desserts, drinks, etc.
+- Multiple food items with prices or descriptions
+- Menu-style formatting showing food items and prices
+- Restaurant menu terminology with actual menu content${analysisInstructions}
 
-MENU PAGE can include:
-- Online ordering systems or menu displays
-- PDF menu links or embedded menus
-- Menu sections even if some prices are missing
-- "Call for pricing" or "Market price" items
-- Seasonal or rotating menu items
+MENU PAGE MUST HAVE:
+- At least 3-5 actual food/drink items listed
+- Clear indication this is a menu (not just food mentions)
+- Menu structure with categories or organized food listings
+- Prices OR detailed food descriptions
 
-NOT A MENU PAGE only if:
-- ONLY contact info, hours, directions (no food mentioned)
-- ONLY general restaurant description/about page
+NOT A MENU PAGE if it has:
+- ONLY contact info, hours, directions
+- ONLY general restaurant description/about page  
 - ONLY reviews, news, or blog posts
 - ONLY reservation or event booking pages
-- Clearly broken/404 page
+- Just mentions of "menu" without actual menu content
+- Navigation menus (website navigation, not food menu)
+- Single food items or brief food mentions
+- Just "View Menu" buttons without actual menu content
 
-Be INCLUSIVE - if there's any reasonable indication of menu content, mark it as a menu page.
+Be STRICT - only mark as menu page if it clearly contains actual menu items and food listings.
+A homepage with just "View Our Menu" button is NOT a menu page.
 
 Return ONLY a JSON object:
 {
   "isMenu": true/false,
   "confidence": 0-100,
-  "reason": "brief explanation focusing on what food/menu content was found",
+  "reason": "brief explanation focusing on what actual menu content was found",
   "menuItemsFound": 0-50
 }`;
 
