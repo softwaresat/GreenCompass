@@ -1,230 +1,353 @@
 /**
- * Lightweight Express server for GreenCompass menu scraping
- * Optimized for weak servers with minimal resource usage
+ * Express server for GreenCompass menu scraping
+ * Optimized for reliable performance with reasonable resource usage
  */
 
-import compression from 'compression';
-import cors from 'cors';
-import express from 'express';
-import helmet from 'helmet';
+const compression = require('compression');
+const cors = require('cors');
+const express = require('express');
+const helmet = require('helmet');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
-import { errorHandler, requestLogger } from './middleware/index.js';
-import { getPlaywrightHealth, scrapeWithMinimalPlaywright } from './services/playwrightScraper.js';
-import { validateUrl } from './utils/validation.js';
+const playwrightScraper = require('./services/playwrightScraper.js');
+const { validateUrl, normalizeUrl, validateOptions } = require('./utils/validation.js');
 
 const app = express();
+
 // Server configuration
 const PORT = process.env.PORT || 3001;
-const HOST = process.env.HOST || '0.0.0.0'; // Listen on all interfaces for VM access
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Rate limiting - increased for better server
-const limiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute window
-  max: 30, // limit each IP to 30 requests per windowMs
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-    retryAfter: '1 minute'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.path === '/health' // Skip rate limiting for health checks
+const rateLimiter = new RateLimiterMemory({
+  keyFunction: (req) => req.ip,
+  points: 30, // 30 requests
+  duration: 60, // per 60 seconds by IP
+  blockDuration: 60, // block for 60 seconds if limit exceeded
 });
 
-// Middleware
-app.use(helmet({
-  contentSecurityPolicy: false, // Disable for API
-  crossOriginEmbedderPolicy: false
-}));
+// Middleware setup
 app.use(compression());
+app.use(helmet());
 app.use(cors({
-  origin: [
-    'http://localhost:8081', // Expo dev
-    'http://localhost:19006', // Expo web
-    'exp://localhost:19000', // Expo app
-    process.env.FRONTEND_URL || '*'
-  ],
+  origin: process.env.FRONTEND_URL || '*',
   credentials: true
 }));
-app.use(express.json({ limit: '10mb' }));
-app.use(requestLogger);
 
-// Apply rate limiting
-app.use(async (req, res, next) => {
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+  
+  res.send = function(data) {
+    const duration = Date.now() - start;
+    console.log(`${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+    originalSend.call(this, data);
+  };
+  
+  next();
+});
+
+// Rate limiting middleware
+const rateLimitMiddleware = async (req, res, next) => {
   try {
     await rateLimiter.consume(req.ip);
     next();
   } catch (rejRes) {
+    const secs = Math.round(rejRes.msBeforeNext / 1000) || 1;
+    res.set('Retry-After', String(secs));
     res.status(429).json({
-      success: false,
-      error: 'Too many requests, please try again later',
-      retryAfter: rejRes.msBeforeNext
+      error: 'Too many requests',
+      retryAfter: secs
     });
   }
-});
+};
+
+// Apply rate limiting to API routes
+app.use('/api', rateLimitMiddleware);
+
+// URL validation middleware
+const urlValidationMiddleware = (req, res, next) => {
+  const { url } = req.body;
+  
+  if (!url) {
+    return res.status(400).json({
+      success: false,
+      error: 'URL is required'
+    });
+  }
+  
+  if (!validateUrl(url)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid URL format or blocked URL'
+    });
+  }
+  
+  // Normalize the URL
+  req.body.url = normalizeUrl(url);
+  next();
+};
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
-  try {
-    const playwrightHealth = await getPlaywrightHealth();
-    const memUsage = process.memoryUsage();
-    
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      memory: {
-        used: Math.round(memUsage.heapUsed / 1024 / 1024) + ' MB',
-        total: Math.round(memUsage.heapTotal / 1024 / 1024) + ' MB',
-        external: Math.round(memUsage.external / 1024 / 1024) + ' MB'
-      },
-      playwright: playwrightHealth,
-      environment: process.env.NODE_ENV || 'development'
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: 'unhealthy',
-      error: error.message
-    });
-  }
-});
-
-// Main scraping endpoint
-app.post('/api/scrape-playwright', async (req, res) => {
-  const startTime = Date.now();
-  
-  try {
-    const { url, options = {} } = req.body;
-    
-    // Validate input
-    if (!url) {
-      return res.status(400).json({
-        success: false,
-        error: 'URL is required',
-        usage: 'POST /api/scrape-playwright with { "url": "https://restaurant.com" }'
-      });
-    }
-    
-    if (!validateUrl(url)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid URL format',
-        provided: url
-      });
-    }
-    
-    console.log(`[API] Scraping request for: ${url}`);
-    console.log(`[API] Options:`, JSON.stringify(options, null, 2));
-    
-    // Perform scraping with timeout
-    const timeoutMs = options.timeout || 45000; // 45 second default
-    const scrapePromise = scrapeWithMinimalPlaywright(url, options);
-    
-    const result = await Promise.race([
-      scrapePromise,
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Request timeout')), timeoutMs)
-      )
-    ]);
-    
-    const duration = Date.now() - startTime;
-    console.log(`[API] Scraping completed in ${duration}ms`);
-    
-    // Add metadata to response
-    result.serverInfo = {
-      processingTime: duration,
-      timestamp: new Date().toISOString(),
-      serverVersion: '1.0.0',
-      method: 'minimal-playwright'
-    };
-    
-    res.json(result);
-    
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error(`[API] Scraping failed after ${duration}ms:`, error.message);
-    
-    res.status(500).json({
-      success: false,
-      error: error.message === 'Request timeout' 
-        ? 'The request took too long to process. The website may be slow or unresponsive.'
-        : 'Failed to scrape the website. The site may be down or blocking automated access.',
-      details: error.message,
-      processingTime: duration,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Performance stats endpoint
-app.get('/api/stats', async (req, res) => {
-  try {
-    const memUsage = process.memoryUsage();
-    const playwrightHealth = await getPlaywrightHealth();
-    
-    res.json({
-      server: {
-        uptime: process.uptime(),
-        nodeVersion: process.version,
-        platform: process.platform,
-        arch: process.arch,
-        pid: process.pid
-      },
-      memory: {
-        heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-        heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-        external: Math.round(memUsage.external / 1024 / 1024),
-        rss: Math.round(memUsage.rss / 1024 / 1024)
-      },
-      playwright: playwrightHealth,
-      rateLimiting: {
-        pointsPerMinute: 10,
-        windowSizeSeconds: 60
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to get server stats',
-      details: error.message
-    });
-  }
+app.get('/health', (req, res) => {
+  const stats = playwrightScraper.getStats();
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    server: 'GreenCompass Backend',
+    version: '1.0.0',
+    scraper: {
+      activeScrapes: stats.activeScrapes,
+      maxConcurrent: stats.maxConcurrent,
+      browserActive: stats.browserActive
+    },
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
+  });
 });
 
 // API documentation endpoint
 app.get('/api/docs', (req, res) => {
   res.json({
-    name: 'GreenCompass Menu Scraping API',
+    title: 'GreenCompass Backend API',
     version: '1.0.0',
-    description: 'Lightweight Playwright-based menu scraping service optimized for weak servers',
+    description: 'Menu scraping API using Playwright for reliable extraction',
     endpoints: {
-      'GET /health': 'Health check with system information',
-      'GET /api/stats': 'Server performance statistics',
-      'POST /api/scrape-playwright': {
-        description: 'Scrape restaurant menu using Playwright',
+      'POST /api/scrape-menu-complete': {
+        description: 'Complete menu discovery and scraping - finds menu page intelligently then scrapes it',
         body: {
-          url: 'string (required) - Restaurant website URL',
+          url: 'string (required) - Restaurant website URL (homepage is fine)',
           options: {
-            timeout: 'number (optional) - Request timeout in ms (default: 45000)',
             waitForSelector: 'string (optional) - CSS selector to wait for',
-            blockResources: 'array (optional) - Resource types to block',
-            mobileViewport: 'boolean (optional) - Use mobile viewport'
+            mobile: 'boolean (optional) - Use mobile viewport',
+            timeout: 'number (optional) - Request timeout in ms (1000-60000)'
           }
         },
+        response: {
+          success: 'boolean',
+          url: 'string - Original URL',
+          menuPageUrl: 'string - Discovered menu page URL',
+          menuItems: 'array of objects with name, price, description',
+          categories: 'array of strings',
+          restaurantInfo: 'object with name, url',
+          extractionTime: 'number (milliseconds)',
+          discoveryMethod: 'string - How the menu was found'
+        },
         example: {
-          url: 'https://restaurant.com',
-          options: {
-            timeout: 30000,
-            waitForSelector: '.menu',
-            blockResources: ['image', 'font'],
-            mobileViewport: true
+          request: {
+            url: 'https://restaurant-example.com',
+            options: {
+              mobile: true,
+              timeout: 45000
+            }
+          },
+          response: {
+            success: true,
+            url: 'https://restaurant-example.com',
+            menuPageUrl: 'https://restaurant-example.com/menu',
+            menuItems: [
+              {
+                name: 'Veggie Burger',
+                price: '$12.99',
+                description: 'Plant-based patty with fresh vegetables'
+              }
+            ],
+            categories: ['Mains', 'Appetizers'],
+            restaurantInfo: {
+              name: 'Green Eats Restaurant'
+            },
+            extractionTime: 3500,
+            discoveryMethod: 'common-paths'
           }
+        }
+      },
+      'POST /api/scrape-playwright': {
+        description: 'Direct menu scraping from a specific URL (legacy endpoint)',
+        body: {
+          url: 'string (required) - Direct menu page URL',
+          options: {
+            waitForSelector: 'string (optional) - CSS selector to wait for',
+            mobile: 'boolean (optional) - Use mobile viewport',
+            timeout: 'number (optional) - Request timeout in ms (1000-60000)'
+          }
+        },
+        response: {
+          success: 'boolean',
+          url: 'string',
+          menuItems: 'array of objects with name, price, description',
+          categories: 'array of strings',
+          restaurantInfo: 'object with name, url',
+          extractionTime: 'number (milliseconds)'
+        },
+        example: {
+          request: {
+            url: 'https://restaurant-example.com/menu',
+            options: {
+              mobile: true,
+              timeout: 30000
+            }
+          },
+          response: {
+            success: true,
+            url: 'https://restaurant-example.com/menu',
+            menuItems: [
+              {
+                name: 'Veggie Burger',
+                price: '$12.99',
+                description: 'Plant-based patty with fresh vegetables'
+              }
+            ],
+            categories: ['Mains', 'Appetizers'],
+            restaurantInfo: {
+              name: 'Green Eats Restaurant'
+            },
+            extractionTime: 3500
+          }
+        }
+      },
+      'GET /health': {
+        description: 'Server health check and status',
+        response: {
+          status: 'string',
+          timestamp: 'string',
+          server: 'string',
+          version: 'string',
+          scraper: 'object with scraper statistics',
+          uptime: 'number',
+          memory: 'object'
+        }
+      },
+      'GET /api/stats': {
+        description: 'Server performance statistics',
+        response: {
+          timestamp: 'string',
+          activeScrapes: 'number',
+          maxConcurrent: 'number',
+          browserActive: 'boolean',
+          uptime: 'number',
+          memory: 'object'
         }
       }
     },
-    rateLimiting: {
-      requests: 10,
-      windowSeconds: 60,
-      message: 'Rate limited to prevent server overload'
+    rateLimit: {
+      requests: 30,
+      window: '60 seconds',
+      blockDuration: '60 seconds'
     }
+  });
+});
+
+// Server statistics endpoint
+app.get('/api/stats', (req, res) => {
+  const stats = playwrightScraper.getStats();
+  res.json({
+    timestamp: new Date().toISOString(),
+    ...stats,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    nodeVersion: process.version,
+    platform: process.platform
+  });
+});
+
+// Complete menu discovery and scraping endpoint
+app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) => {
+  const { url, options = {} } = req.body;
+  
+  try {
+    console.log(`🎯 Complete menu scraping request received for: ${url}`);
+    
+    // Validate options
+    const optionsValidation = validateOptions(options);
+    if (!optionsValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: optionsValidation.error,
+        url: url
+      });
+    }
+    
+    const result = await playwrightScraper.findAndScrapeMenu(url, {
+      waitForSelector: optionsValidation.sanitized.waitForSelector,
+      mobile: optionsValidation.sanitized.mobile || options.mobile || false,
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 45000,
+      includeDiscovery: true
+    });
+    
+    if (result.success) {
+      console.log(`✅ Complete scraping completed successfully: ${result.menuItems?.length || 0} items`);
+      console.log(`📍 Menu found at: ${result.menuPageUrl || 'original URL'}`);
+    } else {
+      console.log(`❌ Complete scraping failed: ${result.error}`);
+    }
+    
+    res.json(result);
+    
+  } catch (error) {
+    console.error(`💥 Complete scraping error for ${url}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      url: url,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Legacy scraping endpoint (direct URL scraping only)
+app.post('/api/scrape-playwright', urlValidationMiddleware, async (req, res) => {
+  const { url, options = {} } = req.body;
+  
+  try {
+    console.log(`🎯 Direct scraping request received for: ${url}`);
+    
+    // Validate options
+    const optionsValidation = validateOptions(options);
+    if (!optionsValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: optionsValidation.error,
+        url: url
+      });
+    }
+    
+    const result = await playwrightScraper.scrapeMenuData(url, {
+      waitForSelector: optionsValidation.sanitized.waitForSelector,
+      mobile: optionsValidation.sanitized.mobile || options.mobile || false,
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 45000
+    });
+    
+    if (result.success) {
+      console.log(`✅ Direct scraping completed successfully: ${result.menuItems?.length || 0} items`);
+    } else {
+      console.log(`❌ Direct scraping failed: ${result.error}`);
+    }
+    
+    res.json(result);
+    
+  } catch (error) {
+    console.error(`💥 Direct scraping error for ${url}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      url: url,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('🚨 Server Error:', error);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -233,44 +356,16 @@ app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
     error: 'Endpoint not found',
-    available: [
+    message: `${req.method} ${req.originalUrl} is not a valid endpoint`,
+    availableEndpoints: [
       'GET /health',
-      'GET /api/stats',
       'GET /api/docs',
+      'GET /api/stats',
+      'POST /api/scrape-menu-complete',
       'POST /api/scrape-playwright'
-    ]
+    ],
+    timestamp: new Date().toISOString()
   });
-});
-
-// Error handler (must be last)
-app.use(errorHandler);
-
-// Graceful shutdown
-const gracefulShutdown = (signal) => {
-  console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
-  
-  server.close(() => {
-    console.log('[Server] HTTP server closed');
-    process.exit(0);
-  });
-  
-  // Force shutdown after 10 seconds
-  setTimeout(() => {
-    console.log('[Server] Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Unhandled rejection handler
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit in production, just log
-  if (process.env.NODE_ENV !== 'production') {
-    process.exit(1);
-  }
 });
 
 // Start server
@@ -278,17 +373,51 @@ const server = app.listen(PORT, HOST, () => {
   const vmIP = process.env.VM_IP || 'YOUR_VM_IP';
   
   console.log('🚀 GreenCompass Backend Server Started');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📍 Local: http://localhost:${PORT}`);
   console.log(`🌐 Network: http://${vmIP}:${PORT}`);
   console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
   console.log(`📊 Stats: http://${vmIP}:${PORT}/api/stats`);
   console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
-  console.log(`🎯 Main API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
-  console.log(`🔗 Frontend should use: http://${vmIP}:${PORT}/api`);
-  console.log(`💡 Configure EXPO_PUBLIC_BACKEND_URL=http://${vmIP}:${PORT}`);
-  console.log(`💾 Memory optimization: Enabled`);
-  console.log(`🛡️  Rate limiting: 10 requests/minute per IP`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
+  console.log(`🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`🔗 Frontend Configuration:`);
+  console.log(`   EXPO_PUBLIC_BACKEND_URL=http://${vmIP}:${PORT}`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`💾 Performance Settings:`);
+  console.log(`   Rate limit: 30 requests/minute`);
+  console.log(`   Max concurrent: 10 scrapes`);
+  console.log(`   Timeout: 45 seconds default`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 });
 
-export default app;
+// Graceful shutdown
+const gracefulShutdown = async (signal) => {
+  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  
+  server.close(async () => {
+    console.log('📡 HTTP server closed');
+    
+    try {
+      await playwrightScraper.closeBrowser();
+      console.log('🌐 Browser closed');
+      console.log('✅ Graceful shutdown complete');
+      process.exit(0);
+    } catch (error) {
+      console.error('❌ Error during shutdown:', error.message);
+      process.exit(1);
+    }
+  });
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    console.log('⏰ Force closing after timeout...');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+module.exports = app;

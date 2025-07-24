@@ -5,7 +5,7 @@
 /**
  * Validate URL format and security
  */
-export const validateUrl = (url) => {
+const validateUrl = (url) => {
   if (!url || typeof url !== 'string') {
     return false;
   }
@@ -48,7 +48,7 @@ export const validateUrl = (url) => {
 /**
  * Sanitize and normalize URL
  */
-export const normalizeUrl = (url) => {
+const normalizeUrl = (url) => {
   try {
     const urlObj = new URL(url);
     
@@ -72,7 +72,7 @@ export const normalizeUrl = (url) => {
 /**
  * Validate scraping options
  */
-export const validateOptions = (options) => {
+const validateOptions = (options) => {
   if (!options || typeof options !== 'object') {
     return { valid: true, sanitized: {} };
   }
@@ -118,4 +118,10 @@ export const validateOptions = (options) => {
   }
   
   return { valid: true, sanitized };
+};
+
+module.exports = {
+  validateUrl,
+  normalizeUrl,
+  validateOptions
 };

@@ -1,0 +1,32 @@
+{
+  "name": "greencompass-backend",
+  "version": "1.0.0",
+  "description": "Backend server for GreenCompass menu scraping with Playwright and reasonable performance",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "install-browser": "npx playwright install chromium --with-deps",
+    "health": "curl http://localhost:3001/health",
+    "test": "node test-scraper.js",
+    "test-network": "./test-network.sh"
+  },
+  "keywords": ["restaurant", "menu", "scraping", "playwright", "express"],
+  "author": "GreenCompass",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "playwright": "^1.40.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "compression": "^1.7.4",
+    "rate-limiter-flexible": "^2.4.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/greencompass.git"
+  }
+}
