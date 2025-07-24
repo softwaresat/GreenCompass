@@ -3,7 +3,12 @@
  * Optimized for reliable menu extraction with reasonable performance
  */
 
+// Load environment variables
+require('dotenv').config();
+
 const { chromium } = require('playwright');
+const axios = require('axios');
+
 
 class PlaywrightScraper {
   constructor() {
@@ -60,10 +65,14 @@ class PlaywrightScraper {
             
             if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 75) {
               console.log(`✅ AI confirmed original URL is a menu page: ${url} (confidence: ${isMenuResult.confidence}%)`);
+              
+              // Now check for sub-menus on this validated menu page
+              const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
+              
               return {
-                ...originalResult,
+                ...comprehensiveResult,
                 menuPageUrl: url,
-                discoveryMethod: 'original-url-ai-validated',
+                discoveryMethod: 'original-url-ai-validated-with-submenus',
                 discoveryTime: Date.now() - discoveryStartTime,
                 aiValidation: {
                   confidence: isMenuResult.confidence,
@@ -78,10 +87,11 @@ class PlaywrightScraper {
         } else {
           console.log(`⚠️ No Gemini API key configured, skipping AI validation for original URL`);
           // Without AI validation, we'll still return the result but with lower confidence
+          const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
           return {
-            ...originalResult,
+            ...comprehensiveResult,
             menuPageUrl: url,
-            discoveryMethod: 'original-url-unvalidated',
+            discoveryMethod: 'original-url-unvalidated-with-submenus',
             discoveryTime: Date.now() - discoveryStartTime
           };
         }
@@ -100,11 +110,14 @@ class PlaywrightScraper {
           if (result.success && result.menuItems && result.menuItems.length > 0) {
             console.log(`✅ Menu found at AI-discovered URL ${aiMenuUrl}: ${result.menuItems.length} items`);
             
+            // Now check for sub-menus on this discovered menu page
+            const comprehensiveResult = await this.scrapeMenuWithSubMenus(aiMenuUrl, options);
+            
             return {
-              ...result,
+              ...comprehensiveResult,
               url: url, // Keep original URL
               menuPageUrl: aiMenuUrl,
-              discoveryMethod: 'ai-discovery',
+              discoveryMethod: 'ai-discovery-with-submenus',
               discoveryTime: Date.now() - discoveryStartTime
             };
           }
@@ -123,11 +136,14 @@ class PlaywrightScraper {
         const result = await this.scrapeMenuData(aiCommonResult, { ...options, skipDiscovery: true });
         
         if (result.success) {
+          // Now check for sub-menus on this common path menu page
+          const comprehensiveResult = await this.scrapeMenuWithSubMenus(aiCommonResult, options);
+          
           return {
-            ...result,
+            ...comprehensiveResult,
             url: url, // Keep original URL
             menuPageUrl: aiCommonResult,
-            discoveryMethod: 'ai-common-paths',
+            discoveryMethod: 'ai-common-paths-with-submenus',
             discoveryTime: Date.now() - discoveryStartTime
           };
         }
@@ -155,6 +171,446 @@ class PlaywrightScraper {
         discoveryTime: Date.now() - discoveryStartTime
       };
     }
+  }
+
+  /**
+   * Comprehensive menu scraping that includes sub-menus
+   * @param {string} menuPageUrl - Main menu page URL
+   * @param {Object} options - Scraping options
+   * @returns {Promise<Object>} Complete menu data from all sub-menus
+   */
+  async scrapeMenuWithSubMenus(menuPageUrl, options = {}) {
+    console.log(`🔍 Starting comprehensive menu scraping with sub-menu discovery for: ${menuPageUrl}`);
+    
+    const subMenuStartTime = Date.now();
+    const allMenuItems = [];
+    const allCategories = [];
+    const visitedUrls = new Set();
+    const subMenuUrls = [];
+    let restaurantInfo = {};
+
+    try {
+      // Step 1: Scrape the main menu page
+      console.log(`📋 Scraping main menu page: ${menuPageUrl}`);
+      const mainMenuResult = await this.scrapeMenuData(menuPageUrl, { ...options, skipDiscovery: true });
+      
+      if (mainMenuResult.success) {
+        allMenuItems.push(...(mainMenuResult.menuItems || []));
+        allCategories.push(...(mainMenuResult.categories || []));
+        restaurantInfo = mainMenuResult.restaurantInfo || {};
+        visitedUrls.add(menuPageUrl);
+        
+        console.log(`✅ Main menu page scraped: ${mainMenuResult.menuItems?.length || 0} items found`);
+      }
+
+      // Step 2: Find sub-menu links on the main menu page
+      console.log(`🔗 Discovering sub-menu links on main menu page...`);
+      const subMenuLinks = await this.findSubMenuLinks(menuPageUrl, options);
+      
+      if (subMenuLinks && subMenuLinks.length > 0) {
+        console.log(`📁 Found ${subMenuLinks.length} potential sub-menu links`);
+        
+        // Step 3: Process each sub-menu link
+        for (const subMenuLink of subMenuLinks) {
+          if (visitedUrls.has(subMenuLink.url)) {
+            console.log(`⏭️ Skipping already visited URL: ${subMenuLink.url}`);
+            continue;
+          }
+          
+          console.log(`📄 Scraping sub-menu: ${subMenuLink.url} (${subMenuLink.category || 'Unknown Category'})`);
+          
+          try {
+            const subMenuResult = await this.scrapeMenuData(subMenuLink.url, { ...options, skipDiscovery: true });
+            
+            if (subMenuResult.success && subMenuResult.menuItems && subMenuResult.menuItems.length > 0) {
+              console.log(`✅ Sub-menu scraped: ${subMenuResult.menuItems.length} items from ${subMenuLink.category || 'Unknown'}`);
+              
+              // Add category context to items if available
+              const categorizedItems = subMenuResult.menuItems.map(item => ({
+                ...item,
+                subMenuCategory: subMenuLink.category || 'Menu',
+                sourceUrl: subMenuLink.url
+              }));
+              
+              allMenuItems.push(...categorizedItems);
+              allCategories.push(...(subMenuResult.categories || []));
+              if (subMenuLink.category) {
+                allCategories.push(subMenuLink.category);
+              }
+              
+              subMenuUrls.push({
+                url: subMenuLink.url,
+                category: subMenuLink.category,
+                itemCount: subMenuResult.menuItems.length
+              });
+              
+              visitedUrls.add(subMenuLink.url);
+            } else {
+              console.log(`⚠️ Sub-menu returned no items: ${subMenuLink.url}`);
+            }
+          } catch (error) {
+            console.log(`❌ Error scraping sub-menu ${subMenuLink.url}: ${error.message}`);
+          }
+          
+          // Small delay between sub-menu requests to be polite
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } else {
+        console.log(`📋 No sub-menu links found, using main menu only`);
+      }
+
+      // Step 4: Deduplicate and organize results
+      const uniqueMenuItems = this.deduplicateMenuItems(allMenuItems);
+      const uniqueCategories = [...new Set(allCategories)].filter(cat => cat && cat.length > 0);
+      
+      const totalTime = Date.now() - subMenuStartTime;
+      console.log(`🎯 Comprehensive menu scraping completed: ${uniqueMenuItems.length} unique items from ${visitedUrls.size} pages in ${totalTime}ms`);
+      
+      return {
+        success: true,
+        menuItems: uniqueMenuItems,
+        categories: uniqueCategories,
+        restaurantInfo: restaurantInfo,
+        subMenuUrls: subMenuUrls,
+        totalPagesScraped: visitedUrls.size,
+        extractionTime: totalTime,
+        isComprehensive: true
+      };
+      
+    } catch (error) {
+      console.error(`❌ Comprehensive menu scraping failed: ${error.message}`);
+      return {
+        success: false,
+        error: `Comprehensive menu scraping failed: ${error.message}`,
+        menuItems: allMenuItems,
+        categories: allCategories,
+        restaurantInfo: restaurantInfo,
+        subMenuUrls: subMenuUrls,
+        totalPagesScraped: visitedUrls.size,
+        extractionTime: Date.now() - subMenuStartTime,
+        isComprehensive: false
+      };
+    }
+  }
+
+  /**
+   * Find sub-menu links on a menu page using AI
+   * @param {string} menuPageUrl - Menu page URL to analyze
+   * @param {Object} options - Scraping options
+   * @returns {Promise<Array>} Array of sub-menu link objects
+   */
+  async findSubMenuLinks(menuPageUrl, options = {}) {
+    console.log(`🔍 Analyzing page for sub-menu links: ${menuPageUrl}`);
+    
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+        console.log('[Sub-Menu Discovery] No API key, using basic link detection');
+        return await this.findSubMenuLinksBasic(menuPageUrl, options);
+      }
+
+      const htmlContent = await this.fetchPageContentForAI(menuPageUrl, options);
+      if (!htmlContent) {
+        console.log(`[Sub-Menu Discovery] Could not fetch content from: ${menuPageUrl}`);
+        return [];
+      }
+
+      const enhancedHtml = this.prepareEnhancedHtmlForGemini(htmlContent);
+      const textContent = this.htmlToText(htmlContent);
+
+      const prompt = `Analyze this restaurant menu page to find SUB-MENU links that lead to specific menu categories or sections.
+
+Menu Page URL: ${menuPageUrl}
+
+HTML Structure:
+${enhancedHtml}
+
+Text Content Sample:
+${textContent.substring(0, 5000)}
+
+FIND SUB-MENU LINKS - Look for these specific patterns:
+
+1. MENU CATEGORY LINKS:
+   - Links to specific food categories: "Appetizers", "Entrees", "Desserts", "Drinks", "Lunch", "Dinner"
+   - Navigation within the menu system
+   - Tabs or sections that load different menu parts
+
+2. SPECIALIZED MENU LINKS:
+   - "Brunch Menu", "Lunch Menu", "Dinner Menu", "Kids Menu", "Wine List"
+   - "Bar Menu", "Cocktails", "Beer List", "Specials"
+   - "Catering Menu", "Takeout Menu", "Delivery Menu"
+
+3. EXTRACT ACTUAL SUB-MENU URLs:
+   - Look for href attributes that contain menu-related paths
+   - Examples: "/menu/appetizers", "/lunch-menu", "/dinner", "/drinks"
+   - Convert relative URLs to absolute URLs using base: ${menuPageUrl}
+
+4. IDENTIFY CATEGORY CONTEXT:
+   - Determine what category each link represents based on link text
+   - Examples: "Appetizers" → category: "Appetizers", "Wine" → category: "Wine & Beverages"
+
+IGNORE:
+- Links back to main homepage
+- Contact/location/about pages
+- External ordering platforms
+- Social media links
+- Non-menu related content
+- The current page URL itself
+
+REQUIREMENTS:
+- Only include links that are likely to contain MORE menu items
+- Focus on category-specific or meal-specific menu pages
+- Prioritize links with clear food/drink category indicators
+
+Return ONLY a JSON object:
+{
+  "subMenuLinks": [
+    {
+      "url": "EXACT full URL (e.g., ${menuPageUrl}/appetizers)",
+      "category": "Category name (e.g., Appetizers, Lunch, Wine)",
+      "confidence": 80,
+      "linkText": "Original link text",
+      "reason": "Why this is likely a sub-menu"
+    }
+  ]
+}
+
+Return maximum 10 sub-menu links, highest confidence first!`;
+
+      console.log(`[Sub-Menu Discovery] Running AI analysis for sub-menu links...`);
+      const result = await this.callGeminiAPI(prompt, apiKey);
+
+      if (!result.success) {
+        console.warn(`[Sub-Menu Discovery] AI analysis failed: ${result.error}`);
+        return await this.findSubMenuLinksBasic(menuPageUrl, options);
+      }
+
+      // Extract JSON from response
+      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn(`[Sub-Menu Discovery] No valid JSON found in AI response`);
+        return await this.findSubMenuLinksBasic(menuPageUrl, options);
+      }
+
+      try {
+        const parsedResult = JSON.parse(jsonMatch[0]);
+        const subMenuLinks = parsedResult.subMenuLinks || [];
+
+        // Validate and normalize URLs
+        const validSubMenuLinks = [];
+        for (const link of subMenuLinks) {
+          if (link.url && link.confidence > 50) {
+            // Convert relative URLs to absolute
+            try {
+              if (!link.url.startsWith('http')) {
+                const baseUrl = new URL(menuPageUrl);
+                if (link.url.startsWith('/')) {
+                  link.url = `${baseUrl.origin}${link.url}`;
+                } else {
+                  link.url = `${baseUrl.origin}/${link.url}`;
+                }
+              }
+              validSubMenuLinks.push(link);
+            } catch (error) {
+              console.warn(`[Sub-Menu Discovery] Could not normalize URL: ${link.url}`);
+            }
+          }
+        }
+
+        console.log(`[Sub-Menu Discovery] AI found ${validSubMenuLinks.length} valid sub-menu links`);
+        return validSubMenuLinks;
+
+      } catch (parseError) {
+        console.error(`[Sub-Menu Discovery] JSON parse error: ${parseError.message}`);
+        return await this.findSubMenuLinksBasic(menuPageUrl, options);
+      }
+
+    } catch (error) {
+      console.error(`[Sub-Menu Discovery] Error: ${error.message}`);
+      return await this.findSubMenuLinksBasic(menuPageUrl, options);
+    }
+  }
+
+  /**
+   * Basic sub-menu link detection without AI
+   * @param {string} menuPageUrl - Menu page URL
+   * @param {Object} options - Scraping options
+   * @returns {Promise<Array>} Array of sub-menu links
+   */
+  async findSubMenuLinksBasic(menuPageUrl, options = {}) {
+    let context = null;
+    let page = null;
+    
+    try {
+      await this.initBrowser();
+      context = await this.browser.newContext({
+        viewport: options.mobile ? { width: 375, height: 667 } : { width: 1920, height: 1080 },
+        userAgent: options.mobile ? 
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1' :
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+      });
+      
+      page = await context.newPage();
+      await page.goto(menuPageUrl, { 
+        waitUntil: 'domcontentloaded',
+        timeout: options.timeout || 30000 
+      });
+      
+      await page.waitForTimeout(2000);
+      
+      const subMenuLinks = await page.evaluate((currentUrl) => {
+        const links = Array.from(document.querySelectorAll('a[href]'));
+        const categoryKeywords = [
+          'appetizer', 'starter', 'app', 'entree', 'main', 'dessert', 'drink', 'beverage',
+          'lunch', 'dinner', 'breakfast', 'brunch', 'bar', 'wine', 'cocktail', 'beer',
+          'kids', 'children', 'special', 'seasonal', 'catering', 'takeout', 'delivery'
+        ];
+        
+        const potentialSubMenus = [];
+        
+        for (const link of links) {
+          const href = link.getAttribute('href');
+          const text = link.textContent.toLowerCase().trim();
+          const title = (link.getAttribute('title') || '').toLowerCase();
+          
+          // Skip if it's the current page
+          if (href === currentUrl || href === window.location.pathname) continue;
+          
+          // Check if the link contains category keywords
+          const hasCategory = categoryKeywords.some(keyword => 
+            href.toLowerCase().includes(keyword) ||
+            text.includes(keyword) ||
+            title.includes(keyword)
+          );
+          
+          if (hasCategory && href) {
+            let fullUrl;
+            try {
+              fullUrl = new URL(href, window.location.origin).href;
+            } catch {
+              continue;
+            }
+            
+            // Try to determine category from text
+            let category = 'Menu';
+            for (const keyword of categoryKeywords) {
+              if (text.includes(keyword)) {
+                category = keyword.charAt(0).toUpperCase() + keyword.slice(1);
+                break;
+              }
+            }
+            
+            potentialSubMenus.push({
+              url: fullUrl,
+              category: category,
+              confidence: 70,
+              linkText: text,
+              reason: 'Contains menu category keywords'
+            });
+          }
+        }
+        
+        return potentialSubMenus;
+      }, menuPageUrl);
+      
+      // Remove duplicates and limit results
+      const uniqueLinks = subMenuLinks
+        .filter((link, index, arr) => arr.findIndex(l => l.url === link.url) === index)
+        .slice(0, 8);
+      
+      console.log(`[Basic Sub-Menu Discovery] Found ${uniqueLinks.length} potential sub-menu links`);
+      return uniqueLinks;
+      
+    } catch (error) {
+      console.error(`[Basic Sub-Menu Discovery] Error: ${error.message}`);
+      return [];
+    } finally {
+      if (context) {
+        await context.close();
+      }
+    }
+  }
+
+  /**
+   * Deduplicate menu items based on name similarity
+   * @param {Array} menuItems - Array of menu items
+   * @returns {Array} Deduplicated menu items
+   */
+  deduplicateMenuItems(menuItems) {
+    if (!menuItems || menuItems.length === 0) return [];
+    
+    const uniqueItems = [];
+    const seenNames = new Set();
+    
+    for (const item of menuItems) {
+      if (!item.name) continue;
+      
+      // Normalize name for comparison
+      const normalizedName = item.name.toLowerCase().trim().replace(/[^\w\s]/g, '');
+      
+      // Check for exact duplicates
+      if (seenNames.has(normalizedName)) {
+        continue;
+      }
+      
+      // Check for similar names (basic similarity check)
+      let isDuplicate = false;
+      for (const existingName of seenNames) {
+        if (this.calculateStringSimilarity(normalizedName, existingName) > 0.85) {
+          isDuplicate = true;
+          break;
+        }
+      }
+      
+      if (!isDuplicate) {
+        uniqueItems.push(item);
+        seenNames.add(normalizedName);
+      }
+    }
+    
+    console.log(`🔄 Deduplication: ${menuItems.length} → ${uniqueItems.length} unique items`);
+    return uniqueItems;
+  }
+
+  /**
+   * Calculate string similarity between two strings
+   * @param {string} str1 - First string
+   * @param {string} str2 - Second string
+   * @returns {number} Similarity score between 0 and 1
+   */
+  calculateStringSimilarity(str1, str2) {
+    if (str1 === str2) return 1;
+    
+    const len1 = str1.length;
+    const len2 = str2.length;
+    
+    if (len1 === 0) return len2 === 0 ? 1 : 0;
+    if (len2 === 0) return 0;
+    
+    const matrix = [];
+    for (let i = 0; i <= len2; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= len1; j++) {
+      matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= len2; i++) {
+      for (let j = 1; j <= len1; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    
+    const maxLen = Math.max(len1, len2);
+    return (maxLen - matrix[len2][len1]) / maxLen;
   }
 
   async findMenuLinksOnPage(url, options = {}) {
