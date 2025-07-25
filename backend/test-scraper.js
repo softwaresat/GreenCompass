@@ -1,6 +1,14 @@
 /**
  * Test script for the GreenCompass backend scraper
- * Run with: node test-scraper.js
+ * Run with: node test-scraper.js [url]
+ * 
+ * Features tested:
+ * - AI-powered menu discovery
+ * - Web page scraping
+ * - PDF menu parsing (automatically detected)
+ * - Sub-menu traversal
+ * 
+ * For PDF-specific testing: node test-pdf-parser.js [pdf-url]
  */
 
 const scraper = require('./services/playwrightScraper.js');

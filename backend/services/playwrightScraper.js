@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const { chromium } = require('playwright');
 const axios = require('axios');
+const { callGeminiAPI } = require('./geminiHelper');
 
 
 class PlaywrightScraper {
@@ -220,16 +221,28 @@ class PlaywrightScraper {
           console.log(`📄 Scraping sub-menu: ${subMenuLink.url} (${subMenuLink.category || 'Unknown Category'})`);
           
           try {
-            const subMenuResult = await this.scrapeMenuData(subMenuLink.url, { ...options, skipDiscovery: true });
+            // Use enhanced scraping that can detect if this page actually contains menu items
+            const subMenuResult = await this.scrapeMenuDataWithMenuDetection(subMenuLink.url, { 
+              ...options, 
+              skipDiscovery: true,
+              expectedCategory: subMenuLink.category 
+            });
             
             if (subMenuResult.success && subMenuResult.menuItems && subMenuResult.menuItems.length > 0) {
-              console.log(`✅ Sub-menu scraped: ${subMenuResult.menuItems.length} items from ${subMenuLink.category || 'Unknown'}`);
+              // Check if this page actually contains menu items (not just navigation)
+              if (subMenuResult.isActualMenu && subMenuResult.menuConfidence > 60) {
+                console.log(`✅ Sub-menu contains actual items: ${subMenuResult.menuItems.length} items from ${subMenuLink.category || 'Unknown'} (confidence: ${subMenuResult.menuConfidence}%)`);
+              } else {
+                console.log(`📝 Sub-menu is likely navigation page: ${subMenuResult.menuItems.length} extracted items (confidence: ${subMenuResult.menuConfidence}%)`);
+              }
               
               // Add category context to items if available
               const categorizedItems = subMenuResult.menuItems.map(item => ({
                 ...item,
                 subMenuCategory: subMenuLink.category || 'Menu',
-                sourceUrl: subMenuLink.url
+                sourceUrl: subMenuLink.url,
+                isFromActualMenu: subMenuResult.isActualMenu,
+                menuConfidence: subMenuResult.menuConfidence
               }));
               
               allMenuItems.push(...categorizedItems);
@@ -378,7 +391,7 @@ Return ONLY a JSON object:
 Return maximum 10 sub-menu links, highest confidence first!`;
 
       console.log(`[Sub-Menu Discovery] Running AI analysis for sub-menu links...`);
-      const result = await this.callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey);
 
       if (!result.success) {
         console.warn(`[Sub-Menu Discovery] AI analysis failed: ${result.error}`);
@@ -699,7 +712,232 @@ Return maximum 10 sub-menu links, highest confidence first!`;
     }
   }
 
+  /**
+   * Enhanced menu scraping with intelligent menu detection during navigation
+   * @param {string} url - URL to scrape
+   * @param {Object} options - Scraping options
+   * @returns {Promise<Object>} Enhanced scraping result with menu detection
+   */
+  async scrapeMenuDataWithMenuDetection(url, options = {}) {
+    // Check if this is a PDF URL first
+    if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+      console.log(`📄 Detected PDF URL during navigation, using PDF parser: ${url}`);
+      const pdfParser = require('./pdfParser');
+      return await pdfParser.parsePDFMenu(url, options);
+    }
+
+    const startTime = Date.now();
+    let context = null;
+    let page = null;
+
+    try {
+      const browser = await this.initBrowser();
+      context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        viewport: options.mobile ? 
+          { width: 375, height: 667 } : 
+          { width: 1280, height: 800 }
+      });
+      
+      page = await context.newPage();
+      page.setDefaultTimeout(45000);
+      page.setDefaultNavigationTimeout(45000);
+      
+      // Block heavy media content
+      await page.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'media', 'font'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+      
+      console.log(`🌐 Navigating to: ${url}`);
+      await page.goto(url, {
+        waitUntil: 'networkidle',
+        timeout: 45000
+      });
+      
+      // Wait for dynamic content
+      await page.waitForTimeout(3000);
+      
+      // First, check if this page contains actual menu items using AI
+      const pageContent = await page.content();
+      const hasMenuItems = await this.detectMenuContentOnPage(pageContent, url, options.expectedCategory);
+      
+      console.log(`🔍 Menu content detection: ${hasMenuItems.isMenu ? 'Contains menu items' : 'Navigation/landing page'} (confidence: ${hasMenuItems.confidence}%)`);
+      
+      // Extract menu data regardless, but flag the type of page
+      const menuData = await this.extractMenuData(page, url);
+      
+      const totalTime = Date.now() - startTime;
+      
+      return {
+        success: true,
+        url: url,
+        extractionTime: totalTime,
+        isActualMenu: hasMenuItems.isMenu,
+        menuConfidence: hasMenuItems.confidence,
+        pageType: hasMenuItems.isMenu ? 'menu-page' : 'navigation-page',
+        ...menuData,
+        menuDetectionInfo: {
+          reason: hasMenuItems.reason,
+          expectedCategory: options.expectedCategory,
+          itemsFoundCount: menuData.menuItems?.length || 0
+        }
+      };
+      
+    } catch (error) {
+      console.error(`❌ Enhanced scraping failed for ${url}:`, error.message);
+      return {
+        success: false,
+        url: url,
+        error: error.message,
+        extractionTime: Date.now() - startTime,
+        isActualMenu: false,
+        menuConfidence: 0,
+        pageType: 'error'
+      };
+    } finally {
+      if (context) {
+        await context.close();
+      }
+    }
+  }
+
+  /**
+   * Detect if a page contains actual menu content using AI
+   * @param {string} htmlContent - Page HTML content
+   * @param {string} url - Page URL
+   * @param {string} expectedCategory - Expected menu category
+   * @returns {Promise<Object>} Menu detection result
+   */
+  async detectMenuContentOnPage(htmlContent, url, expectedCategory = null) {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+        // Fallback to basic detection
+        return this.detectMenuContentBasic(htmlContent, expectedCategory);
+      }
+
+      const textContent = this.htmlToText(htmlContent);
+      const sampleText = textContent.substring(0, 8000); // Larger sample for menu detection
+      
+      const prompt = `Analyze this webpage content to determine if it contains an actual restaurant menu with food items and prices, or if it's just a navigation/landing page.
+
+URL: ${url}
+Expected Category: ${expectedCategory || 'Unknown'}
+
+Page Content:
+${sampleText}
+
+MENU DETECTION CRITERIA:
+
+✅ ACTUAL MENU PAGE - Look for:
+- Multiple food/drink items with names and prices (e.g., "Caesar Salad $12.95")
+- Menu structure with categories like appetizers, entrees, desserts, beverages
+- Detailed food descriptions and ingredients
+- Multiple items listed in an organized format
+- Price information for most items
+
+❌ NAVIGATION/LANDING PAGE - Typically has:
+- Just category buttons/links ("Appetizers", "Entrees", "View Menu")
+- Restaurant information, hours, location
+- General descriptions without specific items
+- Links to other menu pages
+- Single or very few food mentions
+- No actual menu items with prices
+
+ANALYSIS FOCUS:
+${expectedCategory ? `- This page should contain items from category: "${expectedCategory}"` : '- Look for any menu category content'}
+- Count actual food items with descriptions/prices
+- Distinguish between menu content and navigation elements
+- Consider if this is a sub-category page with actual items
+
+Return ONLY JSON:
+{
+  "isMenu": true/false,
+  "confidence": 0-100,
+  "reason": "Brief explanation of why this is/isn't a menu page",
+  "itemsDetected": 0-50,
+  "categoryMatch": true/false
+}`;
+
+      const result = await callGeminiAPI(prompt, apiKey);
+      
+      if (result.success) {
+        try {
+          const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            return {
+              isMenu: !!parsed.isMenu,
+              confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 50,
+              reason: parsed.reason || 'AI analysis completed',
+              itemsDetected: parsed.itemsDetected || 0,
+              categoryMatch: !!parsed.categoryMatch
+            };
+          }
+        } catch (parseError) {
+          console.warn(`[Menu Detection] JSON parse error, using fallback`);
+        }
+      }
+      
+      // Fallback to basic detection
+      return this.detectMenuContentBasic(htmlContent, expectedCategory);
+      
+    } catch (error) {
+      console.warn(`[Menu Detection] Error: ${error.message}, using basic detection`);
+      return this.detectMenuContentBasic(htmlContent, expectedCategory);
+    }
+  }
+
+  /**
+   * Basic menu content detection (fallback method)
+   * @param {string} htmlContent - Page HTML content
+   * @param {string} expectedCategory - Expected category
+   * @returns {Object} Detection result
+   */
+  detectMenuContentBasic(htmlContent, expectedCategory = null) {
+    const textContent = this.htmlToText(htmlContent).toLowerCase();
+    
+    // Count price patterns
+    const pricePattern = /\$\d+\.?\d{0,2}|£\d+\.?\d{0,2}|€\d+\.?\d{0,2}/g;
+    const priceMatches = textContent.match(pricePattern) || [];
+    
+    // Look for food-related words
+    const foodWords = ['menu', 'appetizer', 'entree', 'main', 'dessert', 'salad', 'soup', 'pasta', 'pizza', 'burger', 'sandwich', 'drink', 'wine', 'beer'];
+    const foodWordCount = foodWords.reduce((count, word) => {
+      return count + (textContent.split(word).length - 1);
+    }, 0);
+    
+    // Calculate confidence based on patterns
+    let confidence = 0;
+    if (priceMatches.length >= 5) confidence += 40;
+    if (priceMatches.length >= 10) confidence += 20;
+    if (foodWordCount >= 10) confidence += 30;
+    if (textContent.length > 2000) confidence += 10;
+    
+    const isMenu = confidence >= 60 || priceMatches.length >= 8;
+    
+    return {
+      isMenu,
+      confidence: Math.min(confidence, 95),
+      reason: `Basic detection: ${priceMatches.length} prices, ${foodWordCount} food terms`,
+      itemsDetected: Math.min(priceMatches.length, 50),
+      categoryMatch: expectedCategory ? textContent.includes(expectedCategory.toLowerCase()) : true
+    };
+  }
+
   async scrapeMenuData(url, options = {}) {
+    // Check if this is a PDF URL and handle it differently
+    if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+      console.log(`📄 Detected PDF URL, using PDF parser: ${url}`);
+      const pdfParser = require('./pdfParser');
+      return await pdfParser.parsePDFMenu(url, options);
+    }
+
     // Check concurrent scrapes limit
     if (this.activeScrapes.size >= this.maxConcurrentPages) {
       throw new Error('Too many concurrent scrapes. Please try again in a moment.');
@@ -1247,8 +1485,8 @@ FIND MENU LINKS - Look for these EXACT indicators:
    - Look for actual href attributes in the HTML
    - Convert relative URLs to full URLs using base: ${url}
    - Examples: "/menu" becomes "${url}/menu"
-   - SPECIAL CASE: If you find PDF links (ending in .pdf), note them but prioritize HTML pages
-   - Look for menu PDFs but mark them as "pdf" type with lower confidence
+   - PDF MENUS: If you find PDF links (ending in .pdf), include them with HIGH priority - many restaurants use PDFs for menus
+   - Look for menu PDFs like "menu.pdf", "food-menu.pdf", "dinner-menu.pdf" etc.
 
 5. BUTTON/LINK ANALYSIS:
    - Pay special attention to <button> tags with "menu" text
@@ -1256,12 +1494,14 @@ FIND MENU LINKS - Look for these EXACT indicators:
    - Check data-* attributes that might contain menu URLs
    - Look for JavaScript navigation patterns like: window.location, href assignments
    - Check for React Router links or Vue Router links
+   - PDF LINKS: Look for "Download Menu", "View Menu PDF", "Menu PDF" links
 
 6. SPECIAL CASES - ALWAYS INCLUDE THESE:
    - If you see "View Menu" text anywhere, find the associated link/action
    - Check for menu links in navigation bars, headers, footers
    - Look for menu buttons in hero sections or main content areas
    - Search for any clickable element with menu-related text
+   - PDF menu downloads or views
 
 IGNORE:
 - External ordering platforms (unless they're the ONLY menu option)  
@@ -1278,9 +1518,10 @@ DEBUGGING - If you find "View Menu" or similar text but can't find a URL:
 - Consider that the URL might be built dynamically
 
 PDF HANDLING:
-- If you find PDF menu links, include them but mark as type: "pdf" with confidence 60-70
-- Prefer HTML pages over PDF links when both are available
-- Note: "View Menu PDF", "Download Menu", "Menu.pdf" links
+- If you find PDF menu links, include them with high priority - PDFs are common for restaurant menus
+- Mark PDF links as type: "pdf" with confidence 80-90 (increased from previous 60-70)
+- Look for: "View Menu PDF", "Download Menu", "Menu.pdf", "Dinner Menu.pdf" etc.
+- PDF menus are often more complete than web menus
 
 Return ONLY a JSON object with this structure:
 {
@@ -1309,15 +1550,15 @@ Return ONLY a JSON object with this structure:
 
 PRIORITY ORDER:
 1. HTML pages with visible "Menu" buttons/links (confidence: 90-99, type: "direct")
-2. "Order" or "Food" HTML buttons (confidence: 70-85, type: "direct") 
-3. Navigation menu HTML items (confidence: 60-75, type: "direct")
-4. PDF menu links (confidence: 60-70, type: "pdf")
+2. PDF menu documents (confidence: 80-90, type: "pdf")
+3. "Order" or "Food" HTML buttons (confidence: 70-85, type: "direct") 
+4. Navigation menu HTML items (confidence: 60-75, type: "direct")
 5. Other potential links (confidence: 30-50, type: "direct")
 
 Return maximum 5 URLs, highest confidence first!`;
 
       console.log(`[Enhanced AI Search] Analyzing page structure for: ${url}`);
-      const result = await this.callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey);
       
       if (!result.success) {
         console.warn(`[Enhanced AI Search] API call failed: ${result.error}`);
@@ -1448,7 +1689,7 @@ Return ONLY a JSON object:
   "menuItemsFound": 0-50
 }`;
 
-      const result = await this.callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey);
       
       if (!result.success) {
         console.warn(`[AI Menu Check] API failed for ${url}: ${result.error}`);
@@ -1475,82 +1716,6 @@ Return ONLY a JSON object:
       console.error(`[AI Menu Check] Error: ${error.message}`);
       return null;
     }
-  }
-
-  /**
-   * Call Gemini AI API
-   * @param {string} prompt - The prompt to send
-   * @param {string} apiKey - Gemini API key
-   * @returns {Promise<Object>} API response
-   */
-  async callGeminiAPI(prompt, apiKey) {
-    const axios = require('axios');
-    
-    // Common request body for all API calls
-    const requestBody = {
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }]
-    };
-    
-    // Common request config
-    const requestConfig = {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      timeout: 15000, // 15 second timeout
-    };
-    
-    // Models to try in order of preference
-    const models = [
-      {
-        name: 'gemini-2.0-flash-lite',
-        url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`
-      },
-      {
-        name: 'gemini-2.5-flash',
-        url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`
-      },
-      {
-        name: 'gemini-1.5-flash',
-        url: `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`
-      }
-    ];
-    
-    // Try each model in sequence
-    for (const model of models) {
-      try {
-        console.info(`[Gemini] Trying ${model.name}...`);
-        
-        const response = await axios.post(model.url, requestBody, requestConfig);
-        
-        if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-          const content = response.data.candidates[0].content.parts[0].text;
-          console.info(`[Gemini] Success with ${model.name}`);
-          return {
-            success: true,
-            content: content,
-            model: model.name
-          };
-        } else {
-          console.warn(`[Gemini] ${model.name} returned unexpected format:`, JSON.stringify(response.data, null, 2));
-          continue;
-        }
-        
-      } catch (error) {
-        console.warn(`[Gemini] ${model.name} failed:`, error.message);
-        continue;
-      }
-    }
-    
-    return {
-      success: false,
-      error: 'All Gemini models failed',
-      content: null,
-      model: null
-    };
   }
 
   /**

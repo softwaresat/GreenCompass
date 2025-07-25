@@ -535,15 +535,31 @@ const createScrapedMenuAnalysisPrompt = (menuItems, restaurantName) => {
 MENU ITEMS:
 ${itemsText}
 
-ANALYSIS REQUIREMENTS:
+CRITICAL: VEGETARIAN DEFINITION - Items that contain ANY of the following are NOT VEGETARIAN:
+❌ MEAT: beef, pork, lamb, veal, ham, bacon, sausage, pepperoni, salami, chorizo, prosciutto, etc.
+❌ POULTRY: chicken, turkey, duck, goose, etc.
+❌ FISH: salmon, tuna, cod, tilapia, bass, etc.
+❌ SEAFOOD: shrimp, crab, lobster, scallops, mussels, clams, oysters, etc.
+❌ BROTHS: chicken broth, beef broth, fish stock, bone broth, etc.
+❌ HIDDEN ANIMAL PRODUCTS: gelatin, rennet, anchovies (in sauces), etc.
+
+STRICT ANALYSIS REQUIREMENTS:
 1. MULTILINGUAL SUPPORT: Work with menu items in their original language - translate and understand items in any language
-2. Identify ALL items that are vegetarian (no meat, poultry, fish, or seafood)
-3. Include items that can be easily modified to be vegetarian (mention modification needed)
-4. Look for explicit vegetarian markings in any language (V, VEG, vegetarian symbols, "vegetariano", "végétarien", "vegetarisch", etc.)
-5. Consider side dishes, appetizers, salads, desserts, and beverages that are vegetarian
-6. For dessert places: analyze pastries, cakes, ice cream, coffee drinks, etc. for vegetarian ingredients
-7. Be inclusive - when in doubt about an item, include it with a note about potential ingredients to check
-8. Provide item names in their original language but add English translations in parentheses if needed
+2. Identify ONLY items that are 100% vegetarian (contain NO meat, poultry, fish, seafood, or animal broths)
+3. EXCLUDE ANY ITEM with meat/fish/poultry in the name or description, even if it might seem "mostly vegetarian"
+4. Include items that can be easily modified to be vegetarian ONLY if the base item is vegetarian (mention modification needed)
+5. Look for explicit vegetarian markings in any language (V, VEG, vegetarian symbols, "vegetariano", "végétarien", "vegetarisch", etc.)
+6. Consider side dishes, appetizers, salads, desserts, and beverages that are vegetarian
+7. For dessert places: analyze pastries, cakes, ice cream, coffee drinks, etc. for vegetarian ingredients
+8. When in doubt about an item containing animal products, EXCLUDE it rather than include it
+9. Provide item names in their original language but add English translations in parentheses if needed
+
+EXAMPLES OF WHAT TO EXCLUDE:
+- "Ahi Tuna Bowl" → EXCLUDE (contains tuna)
+- "Nashville Hot Chicken Bowl" → EXCLUDE (contains chicken)
+- "Caesar Salad" → EXCLUDE if it contains anchovies or chicken
+- "Beef and Vegetable Stir Fry" → EXCLUDE (contains beef)
+- "Chicken Noodle Soup" → EXCLUDE (contains chicken)
 
 RESPONSE FORMAT (JSON):
 {
@@ -566,11 +582,11 @@ RESPONSE FORMAT (JSON):
 }
 
 IMPORTANT: 
-- Focus on being helpful to vegetarians
-- When uncertain about ingredients, include the item but note the uncertainty
-- Look for common vegetarian dishes: salads, pasta (check for meat), pizza (veggie options), rice dishes, etc.
-- Consider items like french fries, onion rings, etc. that are often vegetarian
-- Include beverages and desserts that are vegetarian
+- BE EXTREMELY STRICT: If an item has ANY animal protein in the name or description, DO NOT include it
+- Focus on being accurate for vegetarians - better to miss a vegetarian item than to include a non-vegetarian one
+- When uncertain about ingredients, EXCLUDE the item rather than include it
+- Look for common vegetarian dishes: salads (without meat), pasta (without meat/seafood), pizza (veggie options), rice dishes (without meat), etc.
+- Include beverages and desserts that are clearly vegetarian
 
 Please respond ONLY with valid JSON.`;
 };
@@ -699,9 +715,45 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
     
     const parsed = JSON.parse(cleanedContent);
     
+    // Define non-vegetarian terms to filter out (case-insensitive)
+    const nonVegetarianTerms = [
+      // Meat
+      'beef', 'pork', 'lamb', 'veal', 'ham', 'bacon', 'sausage', 'pepperoni', 'salami', 
+      'chorizo', 'prosciutto', 'pancetta', 'brisket', 'steak', 'burger', 'meatball',
+      // Poultry
+      'chicken', 'turkey', 'duck', 'goose', 'poultry', 'wing', 'drumstick',
+      // Fish & Seafood
+      'tuna', 'salmon', 'cod', 'tilapia', 'bass', 'trout', 'halibut', 'mahi', 'ahi',
+      'shrimp', 'crab', 'lobster', 'scallop', 'mussel', 'clam', 'oyster', 'calamari',
+      'fish', 'seafood', 'anchovy', 'sardine', 'mackerel',
+      // Other animal products
+      'bone broth', 'chicken broth', 'beef broth', 'fish stock'
+    ];
+    
+    // Filter out items that contain non-vegetarian terms
+    const filteredVegetarianItems = Array.isArray(parsed.vegetarianItems) 
+      ? parsed.vegetarianItems.filter(item => {
+          const itemName = (item.name || '').toLowerCase();
+          const itemDescription = (item.description || '').toLowerCase();
+          const combinedText = `${itemName} ${itemDescription}`;
+          
+          // Check if any non-vegetarian term appears in the item name or description
+          const containsNonVegTerm = nonVegetarianTerms.some(term => 
+            combinedText.includes(term.toLowerCase())
+          );
+          
+          if (containsNonVegTerm) {
+            console.warn(`[VEGETARIAN FILTER] Excluded "${item.name}" - contains non-vegetarian ingredients`);
+            return false;
+          }
+          
+          return true;
+        })
+      : [];
+    
     // Validate and normalize the response
     const normalized = {
-      vegetarianItems: Array.isArray(parsed.vegetarianItems) ? parsed.vegetarianItems.map(item => ({
+      vegetarianItems: filteredVegetarianItems.map(item => ({
         name: item.name || 'Unknown Item',
         description: item.description || '',
         price: item.price || '',
@@ -710,7 +762,7 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
         notes: item.notes || '',
         isVegan: !!item.isVegan,
         explicitlyMarked: !!item.explicitlyMarked
-      })) : [],
+      })),
       // No longer requesting summary from LLM, just set a placeholder
       summary: '',
       restaurantVegFriendliness: parsed.restaurantVegFriendliness || 'fair',

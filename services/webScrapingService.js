@@ -28,7 +28,7 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       url: normalizedUrl,
       options: {
         mobile: true,
-        timeout: 60000,
+        timeout: 120000,
         waitForSelector: null
       }
     });
@@ -37,7 +37,7 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       url: normalizedUrl,
       options: {
         mobile: true,
-        timeout: 60000 // Allow more time for AI processing
+        timeout: 120000 // Allow more time for AI processing
         // Don't send waitForSelector: null, just omit it
       }
     }, {
@@ -52,7 +52,7 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       console.log(`[Pure Backend] Success: ${menuData.menuItems?.length || 0} items found`);
       console.log(`[Pure Backend] Menu discovered at: ${menuData.menuPageUrl || 'original URL'}`);
       console.log(`[Pure Backend] Discovery method: ${menuData.discoveryMethod || 'unknown'}`);
-      console.log(`[Pure Backend] Processing time: ${menuData.extractionTime || 0}ms`);
+      console.log(`[Pure Backend] Processing time: ${menuData.extractionTime || menuData.discoveryTime || 0}ms`);
       
       return {
         success: true,
@@ -61,14 +61,15 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
         restaurantInfo: menuData.restaurantInfo || {},
         method: 'pure-backend-ai',
         scrapingTime: Date.now() - startTime,
-        extractionTime: menuData.extractionTime || 0,
-        discoveryTime: menuData.discoveryTime || 0,
+        extractionTime: menuData.extractionTime || menuData.discoveryTime || 0,
+        discoveryTime: menuData.discoveryTime || menuData.extractionTime || 0,
         discoveryMethod: menuData.discoveryMethod || 'unknown',
         menuPageUrl: menuData.menuPageUrl,
         url: normalizedUrl
       };
     } else {
       const errorMessage = response.data?.error || 'Backend scraping failed';
+      const responseTime = response.data?.extractionTime || response.data?.discoveryTime || 0;
       console.error(`[Pure Backend] Server error: ${errorMessage}`);
       
       return {
@@ -77,6 +78,8 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
         menuItems: [],
         method: 'pure-backend-ai-failed',
         scrapingTime: Date.now() - startTime,
+        extractionTime: responseTime,
+        discoveryTime: responseTime,
         url: normalizedUrl
       };
     }
@@ -138,6 +141,8 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       menuItems: [],
       method: 'pure-backend-error',
       scrapingTime: Date.now() - startTime,
+      extractionTime: 0,
+      discoveryTime: 0,
       url: websiteUrl,
       networkError: true,
       originalError: error.message
