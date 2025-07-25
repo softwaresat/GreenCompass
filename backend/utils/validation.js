@@ -82,8 +82,8 @@ const validateOptions = (options) => {
   // Validate timeout
   if (options.timeout !== undefined) {
     const timeout = parseInt(options.timeout);
-    if (isNaN(timeout) || timeout < 1000 || timeout > 60000) {
-      return { valid: false, error: 'Timeout must be between 1000 and 60000 milliseconds' };
+    if (isNaN(timeout) || timeout < 1000 || timeout > 120000) {
+      return { valid: false, error: 'Timeout must be between 1000 and 120000 milliseconds' };
     }
     sanitized.timeout = timeout;
   }
