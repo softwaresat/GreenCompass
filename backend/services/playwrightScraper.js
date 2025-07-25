@@ -45,6 +45,34 @@ class PlaywrightScraper {
   async findAndScrapeMenu(url, options = {}) {
     console.log(`🔍 Starting AI-powered intelligent menu discovery for: ${url}`);
     
+    // Check if this is a PDF URL first - PDFs should be handled differently
+    if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+      console.log(`📄 Detected PDF URL, delegating to PDF parser: ${url}`);
+      try {
+        const pdfParser = require('./pdfParser');
+        const pdfResult = await pdfParser.parsePDFMenu(url, options);
+        
+        if (pdfResult.success) {
+          console.log(`✅ PDF parsing successful: ${pdfResult.menuItems?.length || 0} items found`);
+          return pdfResult;
+        } else {
+          console.log(`❌ PDF parsing failed: ${pdfResult.error}`);
+          return pdfResult; // Return the failed result, don't try web scraping methods
+        }
+      } catch (error) {
+        console.error(`❌ PDF parsing error: ${error.message}`);
+        return {
+          success: false,
+          url: url,
+          error: `PDF parsing failed: ${error.message}`,
+          discoveryMethod: 'pdf-parsing-error',
+          menuItems: [],
+          categories: [],
+          restaurantInfo: {}
+        };
+      }
+    }
+    
     const discoveryStartTime = Date.now();
     let menuPageUrl = null;
     let discoveryMethod = 'none';

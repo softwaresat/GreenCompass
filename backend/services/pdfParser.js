@@ -137,6 +137,35 @@ class PDFParser {
   }
 
   /**
+   * Parse menu from extracted text (main parsing coordinator)
+   * @param {string} text - Extracted text from PDF
+   * @param {Object} options - Parsing options
+   * @returns {Promise<Object>} Parsed menu data
+   */
+  async parseMenuFromText(text, options = {}) {
+    try {
+      // Clean the text first
+      const cleanedText = this.cleanExtractedText(text);
+      
+      // Try AI parsing first (with batching if needed)
+      console.log(`🧠 Parsing menu items from extracted text...`);
+      const result = await this.parseMenuWithAI(cleanedText, options);
+      
+      if (result && result.menuItems && result.menuItems.length > 0) {
+        return result;
+      }
+      
+      // Fallback to pattern parsing if AI fails
+      console.log(`🔄 AI parsing returned no items, falling back to pattern parsing...`);
+      return this.parseMenuWithPatterns(cleanedText, options);
+      
+    } catch (error) {
+      console.warn(`⚠️ parseMenuFromText error, using pattern parsing:`, error.message);
+      return this.parseMenuWithPatterns(text, options);
+    }
+  }
+
+  /**
    * Parse menu items from extracted text using AI with batching for large texts
    * @param {string} text - Extracted PDF text
    * @param {Object} options - Parsing options
@@ -177,6 +206,147 @@ class PDFParser {
   }
 
   /**
+   * Parse large PDF menu using batching approach
+   * @param {string} text - Full PDF text
+   * @param {Object} options - Parsing options
+   * @returns {Promise<Object>} Combined parsed menu data
+   */
+  async parseMenuWithBatching(text, options = {}) {
+    try {
+      const { callGeminiAPI } = require('./geminiHelper');
+      const apiKey = process.env.GEMINI_API_KEY;
+      
+      const MAX_CHUNK_SIZE = 8000;
+      const chunks = this.splitTextIntoChunks(text, MAX_CHUNK_SIZE);
+      
+      console.log(`🔄 Processing ${chunks.length} chunks...`);
+      
+      const allMenuItems = [];
+      const allCategories = new Set();
+      let restaurantInfo = {};
+      
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        console.log(`📦 Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)...`);
+        
+        try {
+          const prompt = this.createPDFMenuParsingPrompt(chunk, { 
+            isChunk: true, 
+            chunkNumber: i + 1, 
+            totalChunks: chunks.length 
+          });
+          
+          const result = await callGeminiAPI(prompt, apiKey, `PDF parsing chunk ${i + 1}/${chunks.length}`);
+          
+          if (result.success) {
+            const chunkData = this.parseAIMenuResponse(result.content);
+            
+            // Combine results
+            allMenuItems.push(...chunkData.menuItems);
+            chunkData.categories.forEach(cat => allCategories.add(cat));
+            
+            // Use restaurant info from first successful chunk
+            if (Object.keys(restaurantInfo).length === 0 && chunkData.restaurantInfo) {
+              restaurantInfo = chunkData.restaurantInfo;
+            }
+            
+            console.log(`✅ Chunk ${i + 1} parsed: ${chunkData.menuItems.length} items`);
+          } else {
+            console.warn(`⚠️ Chunk ${i + 1} AI parsing failed, trying pattern parsing`);
+            const chunkData = this.parseMenuWithPatterns(chunk, options);
+            allMenuItems.push(...chunkData.menuItems);
+            chunkData.categories.forEach(cat => allCategories.add(cat));
+          }
+          
+          // Small delay between chunks to avoid rate limiting
+          if (i < chunks.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          
+        } catch (error) {
+          console.warn(`⚠️ Error processing chunk ${i + 1}:`, error.message);
+          // Continue with next chunk
+        }
+      }
+      
+      // Deduplicate items (simple name-based deduplication)
+      const uniqueItems = this.deduplicateMenuItems(allMenuItems);
+      
+      console.log(`🎯 Batching complete: ${uniqueItems.length} unique items from ${allMenuItems.length} total`);
+      
+      return {
+        success: true,
+        menuItems: uniqueItems,
+        categories: Array.from(allCategories),
+        restaurantInfo: restaurantInfo,
+        totalItemsFound: allMenuItems.length,
+        uniqueItemsCount: uniqueItems.length,
+        chunksProcessed: chunks.length
+      };
+      
+    } catch (error) {
+      console.error(`❌ Batching failed:`, error.message);
+      console.log(`🔄 Falling back to pattern parsing for full text`);
+      return this.parseMenuWithPatterns(text, options);
+    }
+  }
+
+  /**
+   * Split text into chunks for processing
+   * @param {string} text - Full text
+   * @param {number} maxSize - Maximum chunk size
+   * @returns {Array<string>} Text chunks
+   */
+  splitTextIntoChunks(text, maxSize) {
+    const chunks = [];
+    let currentChunk = '';
+    
+    // Split by lines to preserve structure
+    const lines = text.split('\n');
+    
+    for (const line of lines) {
+      // If adding this line would exceed max size, start new chunk
+      if (currentChunk.length + line.length + 1 > maxSize && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = line;
+      } else {
+        currentChunk += (currentChunk ? '\n' : '') + line;
+      }
+    }
+    
+    // Add final chunk
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    
+    return chunks;
+  }
+
+  /**
+   * Deduplicate menu items based on name similarity
+   * @param {Array} items - Array of menu items
+   * @returns {Array} Deduplicated items
+   */
+  deduplicateMenuItems(items) {
+    const seen = new Set();
+    const unique = [];
+    
+    for (const item of items) {
+      if (!item.name) continue;
+      
+      // Normalize name for comparison
+      const normalizedName = item.name.toLowerCase().trim().replace(/[^\w\s]/g, '');
+      
+      if (!seen.has(normalizedName)) {
+        seen.add(normalizedName);
+        unique.push(item);
+      }
+    }
+    
+    return unique;
+  }
+
+  /**
    * Clean extracted text for better parsing
    * @param {string} text - Raw extracted text
    * @returns {string} Cleaned text
@@ -194,37 +364,6 @@ class PDFParser {
       .replace(/\.{3,}/g, ' ')
       .replace(/-{3,}/g, ' ')
       .trim();
-  }
-
-  /**
-   * Parse menu using AI (Gemini)
-   * @param {string} text - Cleaned text
-   * @param {Object} options - Options
-   * @returns {Promise<Object>} Parsed menu data
-   */
-  async parseMenuWithAI(text, options = {}) {
-    try {
-      const { callGeminiAPI } = require('./geminiHelper');
-      
-      const prompt = this.createPDFMenuParsingPrompt(text);
-      const apiKey = process.env.GEMINI_API_KEY;
-      
-      console.log(`🤖 Using AI to parse PDF menu content...`);
-      const result = await callGeminiAPI(prompt, apiKey, 'PDF parsing');
-      
-      if (result.success) {
-        const parsedData = this.parseAIMenuResponse(result.content);
-        console.log(`✅ AI parsed ${parsedData.menuItems.length} menu items`);
-        return parsedData;
-      } else {
-        console.warn(`⚠️ AI parsing failed, falling back to pattern parsing`);
-        return this.parseMenuWithPatterns(text, options);
-      }
-      
-    } catch (error) {
-      console.warn(`⚠️ AI parsing error, falling back to pattern parsing:`, error.message);
-      return this.parseMenuWithPatterns(text, options);
-    }
   }
 
   /**
