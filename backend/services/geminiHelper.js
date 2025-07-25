@@ -9,9 +9,10 @@ const axios = require('axios');
  * Call Gemini API with retry logic
  * @param {string} prompt - The prompt to send to Gemini
  * @param {string} apiKey - Gemini API key
+ * @param {string} context - Optional context for logging (e.g., 'PDF parsing', 'menu detection')
  * @returns {Promise<Object>} API response
  */
-async function callGeminiAPI(prompt, apiKey) {
+async function callGeminiAPI(prompt, apiKey, context = 'analysis') {
   // Common request body for all API calls
   const requestBody = {
     contents: [{
@@ -21,12 +22,12 @@ async function callGeminiAPI(prompt, apiKey) {
     }]
   };
   
-  // Common request config
+  // Common request config - longer timeout for PDF parsing
   const requestConfig = {
     headers: {
       'Content-Type': 'application/json',
     },
-    timeout: 15000,
+    timeout: context.includes('PDF') ? 25000 : 15000, // 25s for PDF parsing, 15s for others
   };
   
   // Models to try in order of preference
@@ -48,7 +49,7 @@ async function callGeminiAPI(prompt, apiKey) {
   // Try each model in sequence
   for (const model of models) {
     try {
-      console.info(`[Gemini] Trying ${model.name} for PDF parsing...`);
+      console.info(`[Gemini] Trying ${model.name} for ${context}...`);
       
       const response = await axios.post(model.url, requestBody, requestConfig);
       

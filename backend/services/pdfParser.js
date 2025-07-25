@@ -137,29 +137,42 @@ class PDFParser {
   }
 
   /**
-   * Parse menu items from extracted text
+   * Parse menu items from extracted text using AI with batching for large texts
    * @param {string} text - Extracted PDF text
    * @param {Object} options - Parsing options
    * @returns {Promise<Object>} Parsed menu data
    */
-  async parseMenuFromText(text, options = {}) {
+  async parseMenuWithAI(text, options = {}) {
     try {
-      console.log(`🧠 Parsing menu items from extracted text...`);
+      const { callGeminiAPI } = require('./geminiHelper');
+      const apiKey = process.env.GEMINI_API_KEY;
       
-      // Clean up the text
-      const cleanText = this.cleanExtractedText(text);
+      console.log(`� Using AI to parse PDF menu content...`);
+      console.log(`📊 PDF text length: ${text.length} characters`);
       
-      // Use AI to parse the menu if available
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here') {
-        return await this.parseMenuWithAI(cleanText, options);
+      // If text is too large, use batching approach
+      const MAX_CHUNK_SIZE = 8000; // Conservative limit for API
+      if (text.length > MAX_CHUNK_SIZE) {
+        console.log(`📦 Large PDF detected, using batching approach (${Math.ceil(text.length / MAX_CHUNK_SIZE)} chunks)`);
+        return await this.parseMenuWithBatching(text, options);
+      }
+      
+      // For smaller texts, process normally
+      const prompt = this.createPDFMenuParsingPrompt(text);
+      const result = await callGeminiAPI(prompt, apiKey, 'PDF parsing');
+      
+      if (result.success) {
+        const parsedData = this.parseAIMenuResponse(result.content);
+        console.log(`✅ AI parsed ${parsedData.menuItems.length} menu items`);
+        return parsedData;
       } else {
-        // Fallback to pattern-based parsing
-        return this.parseMenuWithPatterns(cleanText, options);
+        console.warn(`⚠️ AI parsing failed, falling back to pattern parsing`);
+        return this.parseMenuWithPatterns(text, options);
       }
       
     } catch (error) {
-      console.error(`❌ Menu parsing failed:`, error.message);
-      throw error;
+      console.warn(`⚠️ AI parsing error, falling back to pattern parsing:`, error.message);
+      return this.parseMenuWithPatterns(text, options);
     }
   }
 
@@ -197,7 +210,7 @@ class PDFParser {
       const apiKey = process.env.GEMINI_API_KEY;
       
       console.log(`🤖 Using AI to parse PDF menu content...`);
-      const result = await callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey, 'PDF parsing');
       
       if (result.success) {
         const parsedData = this.parseAIMenuResponse(result.content);
@@ -219,16 +232,25 @@ class PDFParser {
    * @param {string} text - PDF text content
    * @returns {string} AI prompt
    */
-  createPDFMenuParsingPrompt(text) {
-    return `You are a restaurant menu parser. Extract structured menu information from this PDF text content.
+  /**
+   * Create AI prompt for PDF menu parsing
+   * @param {string} text - PDF text content
+   * @param {Object} options - Prompt options (for chunking)
+   * @returns {string} AI prompt
+   */
+  createPDFMenuParsingPrompt(text, options = {}) {
+    const isChunk = options.isChunk || false;
+    const chunkInfo = isChunk ? `\n\nCHUNK INFO: This is chunk ${options.chunkNumber} of ${options.totalChunks} from a larger PDF.` : '';
+    
+    return `You are a restaurant menu parser. Extract structured menu information from this PDF text content.${chunkInfo}
 
 PDF CONTENT:
-${text.substring(0, 8000)}
+${text.substring(0, 10000)}${text.length > 10000 ? '\n[Content truncated...]' : ''}
 
 EXTRACT THE FOLLOWING:
 1. Menu items with names, descriptions, and prices
 2. Categories/sections (appetizers, mains, desserts, drinks, etc.)
-3. Restaurant information if available
+3. Restaurant information if available${isChunk ? ' (only if clearly visible in this chunk)' : ''}
 
 PARSING RULES:
 - Look for food item names followed by descriptions and/or prices
@@ -236,7 +258,7 @@ PARSING RULES:
 - Categories are usually headers or section titles
 - Items are often separated by line breaks or special formatting
 - Some menus use dots or dashes to separate names from prices
-- Ignore headers, footers, contact info, and non-menu content
+- Ignore headers, footers, contact info, and non-menu content${isChunk ? '\n- For chunks: Extract ALL menu items found, even if incomplete context' : ''}
 
 RESPONSE FORMAT (JSON):
 {
@@ -251,7 +273,7 @@ RESPONSE FORMAT (JSON):
   "categories": ["appetizers", "mains", "desserts"],
   "restaurantInfo": {
     "name": "Restaurant Name if found",
-    "phone": "Phone if found",
+    "phone": "Phone if found", 
     "address": "Address if found"
   }
 }

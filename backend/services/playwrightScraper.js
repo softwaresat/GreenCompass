@@ -391,7 +391,7 @@ Return ONLY a JSON object:
 Return maximum 10 sub-menu links, highest confidence first!`;
 
       console.log(`[Sub-Menu Discovery] Running AI analysis for sub-menu links...`);
-      const result = await callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey, 'sub-menu discovery');
 
       if (!result.success) {
         console.warn(`[Sub-Menu Discovery] AI analysis failed: ${result.error}`);
@@ -864,7 +864,7 @@ Return ONLY JSON:
   "categoryMatch": true/false
 }`;
 
-      const result = await callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey, 'menu content detection');
       
       if (result.success) {
         try {
@@ -1567,7 +1567,7 @@ PRIORITY ORDER:
 Return maximum 5 URLs, highest confidence first!`;
 
       console.log(`[Enhanced AI Search] Analyzing page structure for: ${url}`);
-      const result = await callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey, 'enhanced menu search');
       
       if (!result.success) {
         console.warn(`[Enhanced AI Search] API call failed: ${result.error}`);
@@ -1698,7 +1698,7 @@ Return ONLY a JSON object:
   "menuItemsFound": 0-50
 }`;
 
-      const result = await callGeminiAPI(prompt, apiKey);
+      const result = await callGeminiAPI(prompt, apiKey, 'menu page validation');
       
       if (!result.success) {
         console.warn(`[AI Menu Check] API failed for ${url}: ${result.error}`);
