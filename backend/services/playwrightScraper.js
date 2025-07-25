@@ -1235,39 +1235,42 @@ Return ONLY JSON:
             continue;
           }
           
-          // Check if the URL exists and is accessible
+          // Handle PDF links differently - don't try to fetch HTML content
+          if (suggestion.type === 'pdf' || suggestion.url.toLowerCase().endsWith('.pdf')) {
+            console.log(`[AI Search] Found PDF menu link: ${suggestion.url}`);
+            console.log(`[AI Search] PDF menus require special handling - returning PDF URL for processing`);
+            
+            // For high-confidence PDF menus, return the URL directly
+            if (suggestion.confidence > 70) {
+              console.log(`[AI Search] ✓ High-confidence PDF menu found: ${suggestion.url}`);
+              return suggestion.url;
+            } else {
+              console.log(`[AI Search] Low-confidence PDF, continuing to look for HTML alternatives...`);
+              continue;
+            }
+          }
+          
+          // For HTML pages, check if the URL exists and is accessible
           const testContent = await this.fetchPageContentForAI(suggestion.url, options);
           if (testContent) {
-            // Handle PDF links differently
-            if (suggestion.type === 'pdf' || suggestion.url.toLowerCase().endsWith('.pdf')) {
-              console.log(`[AI Search] Found PDF menu link: ${suggestion.url}`);
-              console.log(`[AI Search] PDF menus require special handling - skipping content validation`);
+            // Check if this is a menu page for HTML content
+            console.log(`[AI Search] Testing if ${suggestion.url} is a menu page...`);
+            const isMenuResult = await this.checkIfPageIsMenuWithAI(testContent, suggestion.url, apiKey);
+            
+            if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 40) {
+              console.log(`[AI Search] ✓ Confirmed dedicated menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%)`);
+              return suggestion.url;
+            } else if (isMenuResult) {
+              console.log(`[AI Search] ✗ Not a menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%, reason: ${isMenuResult.reason})`);
               
-              // For PDF menus, we can't parse the content easily, so we'll continue looking for HTML alternatives
-              if (suggestion.confidence > 60) {
-                console.log(`[AI Search] Continuing to look for HTML alternatives to PDF menu...`);
-                continue;
-              }
-            } else {
-              // Check if this is a menu page for HTML content
-              console.log(`[AI Search] Testing if ${suggestion.url} is a menu page...`);
-              const isMenuResult = await this.checkIfPageIsMenuWithAI(testContent, suggestion.url, apiKey);
-              
-              if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 40) {
-                console.log(`[AI Search] ✓ Confirmed dedicated menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%)`);
-                return suggestion.url;
-              } else if (isMenuResult) {
-                console.log(`[AI Search] ✗ Not a menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%, reason: ${isMenuResult.reason})`);
-                
-                // If this was a high-confidence suggestion that turned out not to be a menu,
-                // and we haven't hit max depth, try to recursively search from this page
-                if (suggestion.confidence > 70 && depth < 2) {
-                  console.log(`[AI Search] High-confidence suggestion failed, trying recursive search from: ${suggestion.url}`);
-                  const recursiveResult = await this.findMenuPageWithAI(suggestion.url, depth + 1, visitedUrls, options);
-                  if (recursiveResult) {
-                    console.log(`[AI Search] Found menu through recursive search: ${recursiveResult}`);
-                    return recursiveResult;
-                  }
+              // If this was a high-confidence suggestion that turned out not to be a menu,
+              // and we haven't hit max depth, try to recursively search from this page
+              if (suggestion.confidence > 70 && depth < 2) {
+                console.log(`[AI Search] High-confidence suggestion failed, trying recursive search from: ${suggestion.url}`);
+                const recursiveResult = await this.findMenuPageWithAI(suggestion.url, depth + 1, visitedUrls, options);
+                if (recursiveResult) {
+                  console.log(`[AI Search] Found menu through recursive search: ${recursiveResult}`);
+                  return recursiveResult;
                 }
               }
             }
@@ -1339,6 +1342,12 @@ Return ONLY JSON:
    * @returns {Promise<string|null>} HTML content or null if failed
    */
   async fetchPageContentForAI(url, options = {}) {
+    // Check if this is a PDF URL - PDFs cannot be loaded as HTML pages
+    if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+      console.log(`📄 PDF URL detected in fetchPageContentForAI, skipping HTML fetch: ${url}`);
+      return null; // Return null for PDF URLs since they can't be fetched as HTML
+    }
+
     let context = null;
     let page = null;
     

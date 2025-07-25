@@ -46,6 +46,26 @@ const validateUrl = (url) => {
 };
 
 /**
+ * Check if URL points to a PDF file
+ */
+const isPdfUrl = (url) => {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+  
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname.toLowerCase();
+    
+    // Check if URL ends with .pdf or contains .pdf in the path
+    return pathname.endsWith('.pdf') || pathname.includes('.pdf');
+  } catch (error) {
+    // Fallback to simple string check
+    return url.toLowerCase().includes('.pdf');
+  }
+};
+
+/**
  * Sanitize and normalize URL
  */
 const normalizeUrl = (url) => {
@@ -123,5 +143,6 @@ const validateOptions = (options) => {
 module.exports = {
   validateUrl,
   normalizeUrl,
-  validateOptions
+  validateOptions,
+  isPdfUrl
 };
