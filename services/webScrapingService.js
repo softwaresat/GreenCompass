@@ -41,7 +41,7 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
         // Don't send waitForSelector: null, just omit it
       }
     }, {
-      timeout: 90000, // 90 seconds total timeout for AI processing
+      timeout: 150000, // 150 seconds total timeout for AI processing - longer than backend
       headers: {
         'Content-Type': 'application/json'
       }
