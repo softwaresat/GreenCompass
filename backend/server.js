@@ -89,9 +89,50 @@ class ScrapingWorkerPool {
       worker.postMessage({
         jobId,
         url,
-        options
+        options,
+        type: 'single-scrape'
       });
     });
+  }
+
+  async executeParallel(urls, options) {
+    console.log(`🏭 Distributing ${urls.length} URLs across ${this.workers.length} workers`);
+    
+    const promises = urls.map((urlData, index) => {
+      return new Promise((resolve, reject) => {
+        const jobId = ++this.jobId;
+        this.activeJobs.set(jobId, { resolve, reject });
+
+        // Distribute URLs across workers
+        const worker = this.workers[index % this.workers.length];
+        
+        worker.postMessage({
+          jobId,
+          url: urlData.url,
+          options: { ...options, expectedCategory: urlData.category },
+          type: 'sub-menu-scrape',
+          metadata: {
+            category: urlData.category,
+            linkText: urlData.linkText,
+            confidence: urlData.confidence
+          }
+        });
+      });
+    });
+
+    try {
+      const results = await Promise.allSettled(promises);
+      return results.map((result, index) => ({
+        url: urls[index].url,
+        category: urls[index].category,
+        success: result.status === 'fulfilled',
+        data: result.status === 'fulfilled' ? result.value : null,
+        error: result.status === 'rejected' ? result.reason.message : null
+      }));
+    } catch (error) {
+      console.error('🔥 Parallel execution error:', error);
+      throw error;
+    }
   }
 
   async shutdown() {
@@ -109,10 +150,28 @@ if (isMainThread && !workerData?.isWorker) {
 // Handle worker thread execution
 if (!isMainThread && workerData?.isWorker) {
   // This code runs in worker threads
-  parentPort.on('message', async ({ jobId, url, options }) => {
+  parentPort.on('message', async ({ jobId, url, options, type, metadata }) => {
     try {
-      console.log(`🔧 Worker processing job ${jobId} for: ${url}`);
-      const result = await playwrightScraper.findAndScrapeMenu(url, options);
+      console.log(`🔧 Worker processing ${type || 'single-scrape'} job ${jobId} for: ${url}`);
+      
+      let result;
+      if (type === 'sub-menu-scrape') {
+        // Enhanced scraping for sub-menu with category context
+        result = await playwrightScraper.scrapeMenuDataWithMenuDetection(url, {
+          ...options,
+          expectedCategory: metadata?.category,
+          skipDiscovery: true
+        });
+        
+        // Add metadata to result
+        result.subMenuMetadata = metadata;
+        result.scrapingType = 'sub-menu';
+      } else {
+        // Standard complete menu scraping
+        result = await playwrightScraper.findAndScrapeMenu(url, options);
+        result.scrapingType = 'complete';
+      }
+      
       parentPort.postMessage({ jobId, data: result });
     } catch (error) {
       console.error(`🔥 Worker job ${jobId} failed:`, error.message);
@@ -289,6 +348,147 @@ app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) 
   }
 });
 
+// Parallel sub-menu scraping endpoint (NEW - leverages worker distribution)
+app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) => {
+  const { url, options = {} } = req.body;
+  
+  try {
+    console.log(`🚀 Parallel menu scraping request received for: ${url}`);
+    
+    // Validate options
+    const optionsValidation = validateOptions(options);
+    if (!optionsValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: optionsValidation.error,
+        url: url
+      });
+    }
+
+    const scrapingOptions = {
+      waitForSelector: optionsValidation.sanitized.waitForSelector,
+      mobile: optionsValidation.sanitized.mobile || options.mobile || false,
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 120000,
+      includeDiscovery: true
+    };
+
+    if (!scrapingPool || scrapingPool.workers.length === 0) {
+      return res.status(503).json({
+        success: false,
+        error: 'Worker pool not available - falling back to standard scraping',
+        fallbackEndpoint: '/api/scrape-menu-complete',
+        url: url
+      });
+    }
+
+    console.log(`🔍 Step 1: Discovering main menu and sub-menu links...`);
+    
+    // First, discover sub-menu links using main thread
+    const mainResult = await playwrightScraper.scrapeMenuData(url, { ...scrapingOptions, skipDiscovery: true });
+    
+    if (!mainResult.success) {
+      return res.json(mainResult);
+    }
+
+    // Find sub-menu links
+    const subMenuLinks = await playwrightScraper.findSubMenuLinks(url, scrapingOptions);
+    
+    if (!subMenuLinks || subMenuLinks.length === 0) {
+      console.log(`📋 No sub-menu links found, returning main menu only`);
+      return res.json(mainResult);
+    }
+
+    console.log(`🏭 Step 2: Distributing ${subMenuLinks.length} sub-menus across ${scrapingPool.workers.length} workers`);
+    
+    // Execute sub-menu scraping in parallel across workers
+    const parallelResults = await scrapingPool.executeParallel(subMenuLinks, scrapingOptions);
+    
+    // Combine results
+    const allMenuItems = [...(mainResult.menuItems || [])];
+    const allCategories = [...(mainResult.categories || [])];
+    const subMenuUrls = [];
+    let totalSubMenuItems = 0;
+
+    for (const subResult of parallelResults) {
+      if (subResult.success && subResult.data && subResult.data.menuItems) {
+        const categorizedItems = subResult.data.menuItems.map(item => ({
+          ...item,
+          subMenuCategory: subResult.category || 'Menu',
+          sourceUrl: subResult.url,
+          isFromActualMenu: subResult.data.isActualMenu,
+          menuConfidence: subResult.data.menuConfidence,
+          processedByWorker: true
+        }));
+        
+        allMenuItems.push(...categorizedItems);
+        allCategories.push(...(subResult.data.categories || []));
+        
+        if (subResult.category) {
+          allCategories.push(subResult.category);
+        }
+        
+        subMenuUrls.push({
+          url: subResult.url,
+          category: subResult.category,
+          itemCount: subResult.data.menuItems.length,
+          success: true,
+          processedByWorker: true
+        });
+        
+        totalSubMenuItems += subResult.data.menuItems.length;
+      } else {
+        subMenuUrls.push({
+          url: subResult.url,
+          category: subResult.category,
+          itemCount: 0,
+          success: false,
+          error: subResult.error,
+          processedByWorker: true
+        });
+      }
+    }
+
+    // Deduplicate results
+    const uniqueMenuItems = playwrightScraper.deduplicateMenuItems(allMenuItems);
+    const uniqueCategories = [...new Set(allCategories)].filter(cat => cat && cat.length > 0);
+
+    console.log(`🎯 Parallel scraping completed: ${uniqueMenuItems.length} unique items from ${subMenuUrls.length + 1} pages`);
+    console.log(`   📋 Main menu: ${mainResult.menuItems?.length || 0} items`);
+    console.log(`   🏭 Sub-menus: ${totalSubMenuItems} items across ${subMenuUrls.filter(s => s.success).length} pages`);
+
+    const result = {
+      success: true,
+      url: url,
+      menuPageUrl: url,
+      menuItems: uniqueMenuItems,
+      categories: uniqueCategories,
+      restaurantInfo: mainResult.restaurantInfo || {},
+      subMenuUrls: subMenuUrls,
+      totalPagesScraped: subMenuUrls.length + 1,
+      extractionTime: Date.now(),
+      discoveryMethod: 'parallel-worker-distribution',
+      isComprehensive: true,
+      parallelProcessing: {
+        workersUsed: scrapingPool.workers.length,
+        subMenusProcessed: subMenuUrls.length,
+        successfulSubMenus: subMenuUrls.filter(s => s.success).length,
+        failedSubMenus: subMenuUrls.filter(s => !s.success).length
+      }
+    };
+
+    res.json(result);
+    
+  } catch (error) {
+    console.error(`💥 Parallel scraping error for ${url}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      url: url,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Legacy scraping endpoint (direct URL scraping only)
 app.post('/api/scrape-playwright', urlValidationMiddleware, async (req, res) => {
   const { url, options = {} } = req.body;
@@ -355,10 +555,37 @@ app.get('/api/docs', (req, res) => {
       rateLimit: '50 requests/minute'
     },
     endpoints: {
-      'GET /health': 'Health check with multithreading statistics',
-      'GET /api/docs': 'This documentation',
-      'POST /api/scrape-menu-complete': 'Complete menu discovery and scraping (recommended)',
-      'POST /api/scrape-playwright': 'Direct menu scraping from specific URL'
+      'GET /health': {
+        description: 'Health check with multithreading statistics',
+        response: 'Server status, worker pool info, memory usage'
+      },
+      'GET /api/docs': {
+        description: 'This API documentation'
+      },
+      'POST /api/scrape-menu-complete': {
+        description: 'Complete menu discovery and scraping (single-threaded per restaurant)',
+        performance: 'Good for simple sites, uses one worker per request'
+      },
+      'POST /api/scrape-menu-parallel': {
+        description: 'Parallel sub-menu scraping (distributes sub-pages across workers)',
+        performance: 'Best for complex sites with multiple menu sections',
+        features: [
+          'Discovers main menu first',
+          'Finds all sub-menu links',
+          'Distributes sub-menus across available workers',
+          'Combines results intelligently',
+          'Significantly faster for multi-section menus'
+        ]
+      },
+      'POST /api/scrape-playwright': {
+        description: 'Direct menu scraping from specific URL (legacy)',
+        performance: 'Fastest for known menu URLs'
+      }
+    },
+    recommendations: {
+      'Simple restaurant sites': 'Use /api/scrape-menu-complete',
+      'Complex multi-section menus': 'Use /api/scrape-menu-parallel',
+      'Known menu page URLs': 'Use /api/scrape-playwright'
     }
   });
 });
@@ -387,7 +614,8 @@ const startServer = async () => {
     console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
     console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
     console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
-    console.log(`🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
+    console.log(`� Parallel API: POST http://${vmIP}:${PORT}/api/scrape-menu-parallel`);
+    console.log(`�🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`🔗 Frontend Configuration:`);
     console.log(`   EXPO_PUBLIC_BACKEND_URL=http://${vmIP}:${PORT}`);
@@ -399,6 +627,11 @@ const startServer = async () => {
     console.log(`   Worker threads: ${scrapingPool?.workers?.length || 0}`);
     console.log(`   Clustering: ${ENABLE_CLUSTERING ? 'Enabled' : 'Disabled'}`);
     console.log(`   CPU cores: ${numCPUs}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`🎯 Recommended Usage:`);
+    console.log(`   Simple sites: /api/scrape-menu-complete`);
+    console.log(`   Complex sites: /api/scrape-menu-parallel`);
+    console.log(`   Known URLs: /api/scrape-playwright`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   });
 
