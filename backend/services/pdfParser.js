@@ -147,9 +147,15 @@ class PDFParser {
       // Clean the text first
       const cleanedText = this.cleanExtractedText(text);
       
-      // Try AI parsing first (with batching if needed)
-      console.log(`🧠 Parsing menu items from extracted text...`);
-      const result = await this.parseMenuWithAI(cleanedText, options);
+      // Pre-filter text to extract only likely menu content
+      console.log(`🔍 Pre-filtering text to extract menu content...`);
+      const menuFilteredText = this.preFilterMenuContent(cleanedText);
+      
+      console.log(`📊 Text filtering: ${cleanedText.length} → ${menuFilteredText.length} chars (${Math.round((1 - menuFilteredText.length/cleanedText.length) * 100)}% reduction)`);
+      
+      // Try AI parsing on the filtered content
+      console.log(`🧠 Parsing menu items from filtered text...`);
+      const result = await this.parseMenuWithAI(menuFilteredText, options);
       
       if (result && result.menuItems && result.menuItems.length > 0) {
         return result;
@@ -176,11 +182,11 @@ class PDFParser {
       const { callGeminiAPI } = require('./geminiHelper');
       const apiKey = process.env.GEMINI_API_KEY;
       
-      console.log(`� Using AI to parse PDF menu content...`);
-      console.log(`📊 PDF text length: ${text.length} characters`);
+      console.log(`🤖 Using AI to parse filtered menu content...`);
+      console.log(`📊 Filtered text length: ${text.length} characters`);
       
-      // If text is too large, use batching approach
-      const MAX_CHUNK_SIZE = 8000; // Conservative limit for API
+      // With pre-filtering, we can use larger chunks since content is more relevant
+      const MAX_CHUNK_SIZE = 12000; // Increased since we're sending filtered content
       if (text.length > MAX_CHUNK_SIZE) {
         console.log(`📦 Large PDF detected, using batching approach (${Math.ceil(text.length / MAX_CHUNK_SIZE)} chunks)`);
         return await this.parseMenuWithBatching(text, options);
@@ -216,7 +222,7 @@ class PDFParser {
       const { callGeminiAPI } = require('./geminiHelper');
       const apiKey = process.env.GEMINI_API_KEY;
       
-      const MAX_CHUNK_SIZE = 8000;
+      const MAX_CHUNK_SIZE = 12000; // Increased for filtered content
       const chunks = this.splitTextIntoChunks(text, MAX_CHUNK_SIZE);
       
       console.log(`🔄 Processing ${chunks.length} chunks...`);
@@ -258,9 +264,9 @@ class PDFParser {
             chunkData.categories.forEach(cat => allCategories.add(cat));
           }
           
-          // Small delay between chunks to avoid rate limiting
+          // Reduced delay since we're processing filtered, more relevant content
           if (i < chunks.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
           
         } catch (error) {
@@ -381,10 +387,10 @@ class PDFParser {
     const isChunk = options.isChunk || false;
     const chunkInfo = isChunk ? `\n\nCHUNK INFO: This is chunk ${options.chunkNumber} of ${options.totalChunks} from a larger PDF.` : '';
     
-    return `You are a restaurant menu parser. Extract structured menu information from this PDF text content.${chunkInfo}
+    return `You are a restaurant menu parser. Extract structured menu information from this pre-filtered PDF content that likely contains menu items.${chunkInfo}
 
-PDF CONTENT:
-${text.substring(0, 10000)}${text.length > 10000 ? '\n[Content truncated...]' : ''}
+FILTERED MENU CONTENT:
+${text.substring(0, 12000)}${text.length > 12000 ? '\n[Content truncated...]' : ''}
 
 EXTRACT THE FOLLOWING:
 1. Menu items with names, descriptions, and prices
@@ -392,12 +398,13 @@ EXTRACT THE FOLLOWING:
 3. Restaurant information if available${isChunk ? ' (only if clearly visible in this chunk)' : ''}
 
 PARSING RULES:
+- This content has been pre-filtered to contain mostly menu-relevant text
 - Look for food item names followed by descriptions and/or prices
 - Prices are usually in formats like: $12.95, $12, 12.95, etc.
 - Categories are usually headers or section titles
 - Items are often separated by line breaks or special formatting
 - Some menus use dots or dashes to separate names from prices
-- Ignore headers, footers, contact info, and non-menu content${isChunk ? '\n- For chunks: Extract ALL menu items found, even if incomplete context' : ''}
+- Extract ALL menu items found${isChunk ? '\n- For chunks: Extract ALL menu items found, even if incomplete context' : ''}
 
 RESPONSE FORMAT (JSON):
 {
@@ -662,6 +669,194 @@ Please respond ONLY with valid JSON.`;
     }
     
     return info;
+  }
+
+  /**
+   * Pre-filter text to extract only likely menu content
+   * @param {string} text - Cleaned extracted text
+   * @returns {string} Filtered text with only menu-relevant content
+   */
+  preFilterMenuContent(text) {
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const menuLines = [];
+    const categories = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Skip very short lines
+      if (line.length < 3) continue;
+      
+      // Skip obvious non-menu content
+      if (this.isNonMenuContent(line)) continue;
+      
+      // Keep category headers
+      if (this.looksLikeCategory(line)) {
+        categories.push(line);
+        menuLines.push(line);
+        continue;
+      }
+      
+      // Keep lines that look like menu items
+      if (this.looksLikeMenuItem(line)) {
+        menuLines.push(line);
+        continue;
+      }
+      
+      // Keep lines with food-related keywords
+      if (this.containsFoodKeywords(line)) {
+        menuLines.push(line);
+        continue;
+      }
+      
+      // Keep lines with prices
+      if (this.containsPrice(line)) {
+        menuLines.push(line);
+        continue;
+      }
+    }
+    
+    // Add some context around menu sections
+    const contextualLines = this.addContextAroundMenuSections(lines, menuLines);
+    
+    return contextualLines.join('\n');
+  }
+
+  /**
+   * Check if line looks like a menu item
+   * @param {string} line - Text line
+   * @returns {boolean} True if looks like menu item
+   */
+  looksLikeMenuItem(line) {
+    // Menu items typically have:
+    // - Reasonable length (not too short, not too long)
+    // - Mix of letters and possibly numbers/prices
+    // - Not all caps (unless short category)
+    
+    if (line.length < 5 || line.length > 150) return false;
+    
+    // Check for price patterns
+    if (this.containsPrice(line)) return true;
+    
+    // Check for common menu item patterns
+    const menuItemPatterns = [
+      /\w+\s+\w+.*\$\d+/,  // "Item Name $price"
+      /\w+.*\.\.\.\.*\$?\d+/,  // "Item ... price"
+      /\w+.*-.*\$?\d+/,    // "Item - description price"
+      /^[A-Z][a-z]+\s+[A-Z]/,  // "Title Case Words"
+      /\b(served|grilled|fried|baked|fresh|with|topped|sauce|cheese|chicken|beef|fish|pasta|rice)\b/i
+    ];
+    
+    return menuItemPatterns.some(pattern => pattern.test(line));
+  }
+
+  /**
+   * Check if line contains food-related keywords
+   * @param {string} line - Text line
+   * @returns {boolean} True if contains food keywords
+   */
+  containsFoodKeywords(line) {
+    const foodKeywords = [
+      // Cooking methods
+      'grilled', 'fried', 'baked', 'roasted', 'steamed', 'sautéed', 'braised',
+      // Ingredients
+      'chicken', 'beef', 'pork', 'fish', 'salmon', 'shrimp', 'pasta', 'rice',
+      'cheese', 'mushroom', 'onion', 'tomato', 'lettuce', 'avocado',
+      // Descriptors
+      'fresh', 'organic', 'local', 'seasonal', 'homemade', 'crispy', 'tender',
+      // Food types
+      'sandwich', 'burger', 'pizza', 'salad', 'soup', 'steak', 'wrap',
+      // Common menu words
+      'served', 'topped', 'with', 'sauce', 'dressing', 'side', 'choice'
+    ];
+    
+    const lowerLine = line.toLowerCase();
+    return foodKeywords.some(keyword => lowerLine.includes(keyword));
+  }
+
+  /**
+   * Check if line contains price information
+   * @param {string} line - Text line
+   * @returns {boolean} True if contains price
+   */
+  containsPrice(line) {
+    const pricePatterns = [
+      /\$\d+\.?\d{0,2}/,     // $12.95, $12
+      /\d+\.\d{2}\s*$/,      // 12.95 at end
+      /\d+\s*dollars?/i,     // 12 dollars
+      /\d+\s*\$\s*$/,        // 12$ at end
+    ];
+    
+    return pricePatterns.some(pattern => pattern.test(line));
+  }
+
+  /**
+   * Add context lines around identified menu sections
+   * @param {Array<string>} allLines - All lines from text
+   * @param {Array<string>} menuLines - Already identified menu lines
+   * @returns {Array<string>} Lines with added context
+   */
+  addContextAroundMenuSections(allLines, menuLines) {
+    const contextualLines = new Set(menuLines);
+    
+    // For each menu line, add 1-2 lines of context if they seem relevant
+    for (const menuLine of menuLines) {
+      const index = allLines.indexOf(menuLine);
+      if (index === -1) continue;
+      
+      // Add previous line if it looks relevant
+      if (index > 0) {
+        const prevLine = allLines[index - 1];
+        if (this.isRelevantContext(prevLine)) {
+          contextualLines.add(prevLine);
+        }
+      }
+      
+      // Add next line if it looks relevant
+      if (index < allLines.length - 1) {
+        const nextLine = allLines[index + 1];
+        if (this.isRelevantContext(nextLine)) {
+          contextualLines.add(nextLine);
+        }
+      }
+    }
+    
+    // Return lines in original order
+    return allLines.filter(line => contextualLines.has(line));
+  }
+
+  /**
+   * Check if line is relevant context for menu items
+   * @param {string} line - Text line
+   * @returns {boolean} True if relevant context
+   */
+  isRelevantContext(line) {
+    if (line.length < 3 || line.length > 200) return false;
+    
+    // Skip obvious non-menu content
+    if (this.isNonMenuContent(line)) return false;
+    
+    // Include if it has food keywords or looks descriptive
+    return this.containsFoodKeywords(line) || 
+           this.looksLikeDescription(line) ||
+           this.containsPrice(line);
+  }
+
+  /**
+   * Check if line looks like a menu description
+   * @param {string} line - Text line
+   * @returns {boolean} True if looks like description
+   */
+  looksLikeDescription(line) {
+    // Descriptions often contain certain words and structures
+    const descriptionPatterns = [
+      /\b(served with|topped with|includes|featuring|made with|choice of)\b/i,
+      /\b(fresh|homemade|local|organic|seasonal)\b/i,
+      /\([^)]+\)/,  // Text in parentheses
+      /\b(and|or|with)\b.*\b(sauce|dressing|cheese|vegetables?)\b/i
+    ];
+    
+    return descriptionPatterns.some(pattern => pattern.test(line));
   }
 }
 
