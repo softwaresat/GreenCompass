@@ -10,7 +10,24 @@ const helmet = require('helmet');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 const playwrightScraper = require('./services/playwrightScraper.js');
-const { validateUrl, normalizeUrl, validateOptions } = require('./utils/validation.js');
+const { validateUrl, normalizeUrl, validateOption// Start server
+const server = app.listen(PORT, HOST, () => {
+  const vmIP = process.env.VM_IP || 'YOUR_VM_IP';
+  
+  console.log('🚀 GreenCompass Backend Server Started');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`📍 Local: http://localhost:${PORT}`);
+  console.log(`🌐 Network: http://${vmIP}:${PORT}`);
+  console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
+  console.log(`📊 Stats: http://${vmIP}:${PORT}/api/stats`);
+  console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
+  console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
+  console.log(`📄 PDF Parser API: POST http://${vmIP}:${PORT}/api/parse-pdf-menu`);
+  console.log(`🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+// Set server timeout to 5 minutes to allow for long-running operations
+server.timeout = 300000; // 5 minutes./utils/validation.js');
 
 const app = express();
 
@@ -142,7 +159,7 @@ app.get('/api/docs', (req, res) => {
             url: 'https://restaurant-example.com',
             options: {
               mobile: true,
-              timeout: 45000
+              timeout: 120000
             }
           },
           response: {
@@ -187,7 +204,7 @@ app.get('/api/docs', (req, res) => {
           request: {
             url: 'https://restaurant-example.com/menu.pdf',
             options: {
-              timeout: 30000
+              timeout: 120000
             }
           },
           response: {
@@ -234,7 +251,7 @@ app.get('/api/docs', (req, res) => {
             url: 'https://restaurant-example.com/menu',
             options: {
               mobile: true,
-              timeout: 30000
+              timeout: 120000
             }
           },
           response: {
@@ -358,7 +375,7 @@ app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) 
     const result = await playwrightScraper.findAndScrapeMenu(url, {
       waitForSelector: optionsValidation.sanitized.waitForSelector,
       mobile: optionsValidation.sanitized.mobile || options.mobile || false,
-      timeout: optionsValidation.sanitized.timeout || options.timeout || 45000,
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 120000,
       includeDiscovery: true
     });
     
@@ -402,7 +419,7 @@ app.post('/api/scrape-playwright', urlValidationMiddleware, async (req, res) => 
     const result = await playwrightScraper.scrapeMenuData(url, {
       waitForSelector: optionsValidation.sanitized.waitForSelector,
       mobile: optionsValidation.sanitized.mobile || options.mobile || false,
-      timeout: optionsValidation.sanitized.timeout || options.timeout || 45000
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 120000
     });
     
     if (result.success) {
@@ -474,9 +491,12 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`💾 Performance Settings:`);
   console.log(`   Rate limit: 30 requests/minute`);
   console.log(`   Max concurrent: 10 scrapes`);
-  console.log(`   Timeout: 45 seconds default`);
+  console.log(`   Timeout: 2 minutes default`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 });
+
+// Set server timeout to 5 minutes to allow for long-running operations
+server.timeout = 300000; // 5 minutes
 
 // Graceful shutdown
 const gracefulShutdown = async (signal) => {
