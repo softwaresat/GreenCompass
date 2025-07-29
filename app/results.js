@@ -139,24 +139,37 @@ export default function ResultsScreen() {
       setLoading(true);
       setError(null);
 
-      // Request location permission
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      // First check current permission status
+      const { status: currentStatus } = await Location.getForegroundPermissionsAsync();
+      console.log('Current location permission status:', currentStatus);
       
-      if (status !== 'granted') {
+      let finalStatus = currentStatus;
+      
+      // Only request permission if not already granted
+      if (currentStatus !== 'granted') {
+        console.log('Requesting location permission...');
+        const { status: requestedStatus } = await Location.requestForegroundPermissionsAsync();
+        finalStatus = requestedStatus;
+        console.log('Requested permission status:', requestedStatus);
+      }
+      
+      if (finalStatus !== 'granted') {
+        console.log('Location permission denied, final status:', finalStatus);
         setError('Location permission denied. You can manually enter your location below.');
         setShowManualInput(true);
-        setLocationChoiceMade(false); // Reset location choice
+        setLocationChoiceMade(false);
         setLoading(false);
         return;
       }
 
       // Check if location services are enabled
       const providerStatus = await Location.getProviderStatusAsync();
+      console.log('Location provider status:', providerStatus);
       
       if (!providerStatus.locationServicesEnabled) {
         setError('Location services are disabled. You can manually enter your location below.');
         setShowManualInput(true);
-        setLocationChoiceMade(false); // Reset location choice
+        setLocationChoiceMade(false);
         setLoading(false);
         return;
       }
@@ -165,30 +178,34 @@ export default function ResultsScreen() {
       let location;
       
       try {
+        console.log('Getting current location...');
         // Add a timeout to the location request
         const locationPromise = Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
+          timeout: 10000, // 10 seconds timeout at the API level
         });
         
         // Create a timeout promise
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Location request timed out')), 15000) // 15 seconds timeout
+          setTimeout(() => reject(new Error('Location request timed out')), 12000) // 12 seconds timeout
         );
         
         // Race the location request against the timeout
         location = await Promise.race([locationPromise, timeoutPromise]);
+        console.log('Current location obtained:', location.coords);
       } catch (locationError) {
         console.log('Location error:', locationError);
         
         // Try to get last known location as fallback
         try {
+          console.log('Trying last known location...');
           location = await Location.getLastKnownPositionAsync({
             maxAge: 300000, // 5 minutes
             requiredAccuracy: 1000, // 1km accuracy
           });
           
           if (location) {
-            console.log('Using last known location');
+            console.log('Using last known location:', location.coords);
           }
         } catch (lastKnownError) {
           console.log('Last known location error:', lastKnownError);
@@ -196,30 +213,33 @@ export default function ResultsScreen() {
         
         // If all else fails, offer manual input
         if (!location) {
+          console.log('No location available, showing manual input');
           setError('Unable to get your location automatically. Please enter your location manually below.');
           setShowManualInput(true);
-          setLocationChoiceMade(false); // Reset location choice
+          setLocationChoiceMade(false);
           setLoading(false);
           return;
         }
       }
 
       // Proceed with restaurant search
+      console.log('Searching for restaurants near location...');
       const nearbyRestaurants = await getNearbyRestaurants(location.coords);
       
       if (nearbyRestaurants && nearbyRestaurants.length > 0) {
         setRestaurants(nearbyRestaurants);
         setUserLocation(location.coords);
-        setSearchResults([]); // Reset search results
+        setSearchResults([]);
+        setLocationChoiceMade(true); // Set this here too for consistency
       } else {
         setError('No restaurants found near your location. Try a different location.');
-        setLocationChoiceMade(false); // Reset location choice if no restaurants found
+        setLocationChoiceMade(false);
       }
       
     } catch (error) {
       console.error('Failed to load restaurants:', error);
       setError(`Failed to load restaurants: ${error.message}`);
-      setLocationChoiceMade(false); // Reset location choice on error
+      setLocationChoiceMade(false);
     } finally {
       setLoading(false);
     }

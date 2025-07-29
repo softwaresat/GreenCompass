@@ -19,9 +19,11 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE"
       ],
-      "package": "com.anonymous.GreenCompass"
+      "package": "com.anonymous.GreenCompass",
+      "usesCleartextTraffic": true
     },
     "web": {
       "bundler": "metro",
@@ -35,7 +37,8 @@
         {
           "locationAlwaysAndWhenInUsePermission": "This app needs access to location to find nearby restaurants.",
           "locationAlwaysPermission": "This app needs access to location to find nearby restaurants.",
-          "locationWhenInUsePermission": "This app needs access to location to find nearby restaurants."
+          "locationWhenInUsePermission": "This app needs access to location to find nearby restaurants.",
+          "isAndroidBackgroundLocationEnabled": false
         }
       ],
       [
