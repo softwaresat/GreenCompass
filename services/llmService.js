@@ -34,8 +34,8 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
     // First, analyze menu items for vegetarian options with batching
     console.log(`[WebScraping] Analyzing ${menuItems.length} menu items from "${restaurantName}" for vegetarian options...`);
     
-    // Use batching for initial analysis to handle large menus
-    const analysisBatchSize = 75; // Increased batch size for initial analysis
+    // Use smaller batching for initial analysis to prevent timeouts
+    const analysisBatchSize = 60; // Reduced batch size to prevent large prompts and timeouts
     const analysisBatches = splitIntoBatches(menuItems, analysisBatchSize);
     console.log(`[DEBUG] Split ${menuItems.length} menu items into ${analysisBatches.length} batches of up to ${analysisBatchSize} items each for analysis`);
     
@@ -117,7 +117,7 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       console.log(`[WebScraping] Enhancing ${vegetarianItemsToEnhance.length} vegetarian items with AI...`);
       
       // Use batching for enhancement to avoid token limits
-      const batchSize = 75; // Increased batch size for efficiency
+      const batchSize = 25; // Reduced batch size to prevent timeouts
       const batches = splitIntoBatches(vegetarianItemsToEnhance, batchSize);
       console.log(`[DEBUG] Split ${vegetarianItemsToEnhance.length} vegetarian items into ${batches.length} batches of up to ${batchSize} items each`);
       

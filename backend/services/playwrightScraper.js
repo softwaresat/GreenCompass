@@ -560,7 +560,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       page = await context.newPage();
       await page.goto(menuPageUrl, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 120000 
+        timeout: options.timeout || 30000 // Reduced to 30 seconds default
       });
       
       await page.waitForTimeout(2000);
@@ -736,7 +736,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       page = await context.newPage();
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 120000 
+        timeout: options.timeout || 30000 // Reduced to 30 seconds default
       });
       
       // Wait a bit for dynamic content
@@ -834,8 +834,8 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       });
       
       page = await context.newPage();
-      page.setDefaultTimeout(120000);
-      page.setDefaultNavigationTimeout(120000);
+      page.setDefaultTimeout(30000); // Reduced to 30 seconds
+      page.setDefaultNavigationTimeout(30000); // Reduced to 30 seconds
       
       // Block heavy media content
       await page.route('**/*', (route) => {
@@ -850,7 +850,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       console.log(`🌐 Navigating to: ${url}`);
       await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: 120000
+        timeout: 30000 // Reduced to 30 seconds
       });
       
       // Wait for dynamic content
@@ -1058,9 +1058,9 @@ Return ONLY JSON:
       
       page = await context.newPage();
       
-      // Set extended timeouts for complex operations
-      page.setDefaultTimeout(120000);
-      page.setDefaultNavigationTimeout(120000);
+      // Set reduced timeouts for faster failure detection
+      page.setDefaultTimeout(30000); // Reduced to 30 seconds
+      page.setDefaultNavigationTimeout(30000); // Reduced to 30 seconds
       
       // Block only heavy media content (keep stylesheets for layout)
       await page.route('**/*', (route) => {
@@ -1089,7 +1089,7 @@ Return ONLY JSON:
       console.log(`🌐 Navigating to: ${url}`);
       await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: 120000
+        timeout: 30000 // Reduced to 30 seconds
       });
       
       // Wait for selector if provided
@@ -1580,7 +1580,7 @@ Return ONLY JSON:
       
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 120000 
+        timeout: options.timeout || 30000 // Reduced to 30 seconds default
       });
       
       // Wait a bit for dynamic content
