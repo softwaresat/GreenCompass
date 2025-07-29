@@ -1373,8 +1373,32 @@ Return ONLY JSON:
         if (menuSearchResult && menuSearchResult.debugInfo && 
             (menuSearchResult.debugInfo.foundMenuText?.length > 0 || 
              menuSearchResult.debugInfo.foundButtons?.length > 0 || 
-             menuSearchResult.debugInfo.foundLinks?.length > 0)) {
+             menuSearchResult.debugInfo.foundLinks?.length > 0 ||
+             menuSearchResult.debugInfo.foundClickableDivs?.length > 0)) {
           console.log(`[AI Search] AI found menu-related content but no URLs. Trying basic link extraction as backup...`);
+          
+          // Special case: If we found clickable divs with menu text, try common menu paths
+          if (menuSearchResult.debugInfo.foundClickableDivs?.length > 0) {
+            console.log(`[AI Search] Found clickable menu divs, trying common menu paths...`);
+            const baseUrl = new URL(currentUrl);
+            const commonPaths = ['/menu', '/food', '/our-menu', '/dining', '/eat'];
+            
+            for (const path of commonPaths) {
+              const testUrl = `${baseUrl.origin}${path}`;
+              if (!visitedUrls.has(testUrl)) {
+                console.log(`[AI Search] Testing common path after finding menu div: ${testUrl}`);
+                const testContent = await this.fetchPageContentForAI(testUrl, options);
+                if (testContent) {
+                  const isMenuResult = await this.checkIfPageIsMenuWithAI(testContent, testUrl, apiKey);
+                  if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 40) {
+                    console.log(`[AI Search] ✓ Found menu via common path after div detection: ${testUrl} (confidence: ${isMenuResult.confidence}%)`);
+                    return testUrl;
+                  }
+                }
+              }
+            }
+          }
+          
           const basicLinks = await this.findMenuLinksOnPage(currentUrl, options);
           if (basicLinks && basicLinks.length > 0) {
             console.log(`[AI Search] Basic method found ${basicLinks.length} potential menu links`);
@@ -1587,11 +1611,20 @@ FIND MENU LINKS - Look for these EXACT indicators:
 
 5. BUTTON/LINK ANALYSIS:
    - Pay special attention to <button> tags with "menu" text
+   - CRITICAL: Look for <div> and <span> elements with "menu" text that might be clickable
    - Look at onclick handlers that might navigate to menu pages
    - Check data-* attributes that might contain menu URLs
    - Look for JavaScript navigation patterns like: window.location, href assignments
    - Check for React Router links or Vue Router links
+   - Check for CSS classes that indicate clickability (btn, button, clickable, pointer, etc.)
    - PDF LINKS: Look for "Download Menu", "View Menu PDF", "Menu PDF" links
+
+6. CLICKABLE DIV DETECTION:
+   - Look for <div> elements containing "Menu" text even if they don't have href attributes
+   - Check for data-href, data-url, data-link, or similar data attributes
+   - Look for parent elements that might contain the actual navigation logic
+   - Check for CSS classes like "menu-item", "nav-item", "clickable", etc.
+   - If you find "MENU" in a div, report it even if you can't find the URL
 
 6. SPECIAL CASES - ALWAYS INCLUDE THESE:
    - If you see "View Menu" text anywhere, find the associated link/action
@@ -1641,7 +1674,9 @@ Return ONLY a JSON object with this structure:
   "debugInfo": {
     "foundMenuText": ["list of menu-related text found"],
     "foundButtons": ["list of button texts that contain menu"],
-    "foundLinks": ["list of link texts that contain menu"]
+    "foundLinks": ["list of link texts that contain menu"],
+    "foundClickableDivs": ["list of clickable div elements with menu text"],
+    "foundDataAttributes": ["list of data-* attributes that might contain URLs"]
   }
 }
 
@@ -1677,6 +1712,8 @@ Return maximum 5 URLs, highest confidence first!`;
           console.log(`[Enhanced AI Search Debug] Found menu text: ${JSON.stringify(parsedResult.debugInfo.foundMenuText)}`);
           console.log(`[Enhanced AI Search Debug] Found buttons: ${JSON.stringify(parsedResult.debugInfo.foundButtons)}`);
           console.log(`[Enhanced AI Search Debug] Found links: ${JSON.stringify(parsedResult.debugInfo.foundLinks)}`);
+          console.log(`[Enhanced AI Search Debug] Found clickable divs: ${JSON.stringify(parsedResult.debugInfo.foundClickableDivs)}`);
+          console.log(`[Enhanced AI Search Debug] Found data attributes: ${JSON.stringify(parsedResult.debugInfo.foundDataAttributes)}`);
         }
         
         // Validate and normalize URLs
@@ -1833,14 +1870,20 @@ Return ONLY a JSON object:
     const allLinks = cleaned.match(linkPattern) || [];
     importantElements.push(...allLinks);
     
-    // Get ALL buttons and clickable elements
+    // Get ALL buttons and clickable elements - enhanced for clickable divs
     const buttonPatterns = [
       /<button[^>]*>[\s\S]*?<\/button>/gi,
       /<input[^>]*type\s*=\s*["'](?:button|submit|image)["'][^>]*>/gi,
-      /<div[^>]*(?:onclick|role\s*=\s*["']button["'])[^>]*>[\s\S]*?<\/div>/gi,
-      /<span[^>]*(?:onclick|role\s*=\s*["']button["'])[^>]*>[\s\S]*?<\/span>/gi,
-      /<div[^>]*class[^>]*(?:btn|button|click|menu-item|nav-item)[^>]*>[\s\S]*?<\/div>/gi,
-      /<a[^>]*class[^>]*(?:btn|button|menu-btn|nav-btn)[^>]*>[\s\S]*?<\/a>/gi
+      // Enhanced patterns for clickable divs
+      /<div[^>]*(?:onclick|role\s*=\s*["']button["']|data-[^>]*click|tabindex)[^>]*>[\s\S]*?<\/div>/gi,
+      /<span[^>]*(?:onclick|role\s*=\s*["']button["']|data-[^>]*click|tabindex)[^>]*>[\s\S]*?<\/span>/gi,
+      // Look for divs/spans with clickable classes or menu-related classes
+      /<div[^>]*class[^>]*(?:btn|button|click|menu-item|nav-item|menu-link|menu-btn|clickable|pointer)[^>]*>[\s\S]*?<\/div>/gi,
+      /<span[^>]*class[^>]*(?:btn|button|click|menu-item|nav-item|menu-link|menu-btn|clickable|pointer)[^>]*>[\s\S]*?<\/span>/gi,
+      /<a[^>]*class[^>]*(?:btn|button|menu-btn|nav-btn)[^>]*>[\s\S]*?<\/a>/gi,
+      // Look for ANY div/span that contains the word "menu" in text content
+      /<div[^>]*>[^<]*[Mm][Ee][Nn][Uu][^<]*<\/div>/gi,
+      /<span[^>]*>[^<]*[Mm][Ee][Nn][Uu][^<]*<\/span>/gi
     ];
     
     buttonPatterns.forEach(pattern => {
