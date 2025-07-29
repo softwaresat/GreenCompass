@@ -185,11 +185,13 @@ class PDFParser {
       console.log(`🤖 Using AI to parse filtered menu content...`);
       console.log(`📊 Filtered text length: ${text.length} characters`);
       
-      // With pre-filtering, we can use larger chunks since content is more relevant
-      const MAX_CHUNK_SIZE = 12000; // Increased since we're sending filtered content
+      // Use much smaller chunks to avoid timeouts
+      const MAX_CHUNK_SIZE = 6000; // Reduced to ensure no timeouts
       if (text.length > MAX_CHUNK_SIZE) {
-        console.log(`📦 Large PDF detected, using batching approach (${Math.ceil(text.length / MAX_CHUNK_SIZE)} chunks)`);
-        return await this.parseMenuWithBatching(text, options);
+        // Calculate actual chunks to provide accurate logging
+        const actualChunks = this.splitTextIntoChunks(text, MAX_CHUNK_SIZE);
+        console.log(`📦 Large content detected, using batching approach (${actualChunks.length} chunks)`);
+        return await this.parseMenuWithBatching(text, options, actualChunks);
       }
       
       // For smaller texts, process normally
@@ -215,15 +217,16 @@ class PDFParser {
    * Parse large PDF menu using batching approach
    * @param {string} text - Full PDF text
    * @param {Object} options - Parsing options
+   * @param {Array} preCalculatedChunks - Pre-calculated chunks (optional)
    * @returns {Promise<Object>} Combined parsed menu data
    */
-  async parseMenuWithBatching(text, options = {}) {
+  async parseMenuWithBatching(text, options = {}, preCalculatedChunks = null) {
     try {
       const { callGeminiAPI } = require('./geminiHelper');
       const apiKey = process.env.GEMINI_API_KEY;
       
-      const MAX_CHUNK_SIZE = 12000; // Increased for filtered content
-      const chunks = this.splitTextIntoChunks(text, MAX_CHUNK_SIZE);
+      // Use pre-calculated chunks if provided, otherwise calculate them
+      const chunks = preCalculatedChunks || this.splitTextIntoChunks(text, 6000);
       
       console.log(`🔄 Processing ${chunks.length} chunks...`);
       
@@ -310,10 +313,13 @@ class PDFParser {
     // Split by lines to preserve structure
     const lines = text.split('\n');
     
+    console.log(`📏 Splitting ${text.length} chars into chunks (max ${maxSize} chars per chunk, ${lines.length} lines)`);
+    
     for (const line of lines) {
       // If adding this line would exceed max size, start new chunk
       if (currentChunk.length + line.length + 1 > maxSize && currentChunk.length > 0) {
         chunks.push(currentChunk.trim());
+        console.log(`📦 Chunk ${chunks.length} created: ${currentChunk.length} chars`);
         currentChunk = line;
       } else {
         currentChunk += (currentChunk ? '\n' : '') + line;
@@ -323,8 +329,10 @@ class PDFParser {
     // Add final chunk
     if (currentChunk.trim()) {
       chunks.push(currentChunk.trim());
+      console.log(`📦 Final chunk ${chunks.length} created: ${currentChunk.trim().length} chars`);
     }
     
+    console.log(`✅ Text split into ${chunks.length} chunks (estimated: ${Math.ceil(text.length / maxSize)})`);
     return chunks;
   }
 
@@ -387,44 +395,35 @@ class PDFParser {
     const isChunk = options.isChunk || false;
     const chunkInfo = isChunk ? `\n\nCHUNK INFO: This is chunk ${options.chunkNumber} of ${options.totalChunks} from a larger PDF.` : '';
     
-    return `You are a restaurant menu parser. Extract structured menu information from this pre-filtered PDF content that likely contains menu items.${chunkInfo}
+    return `You are a restaurant menu parser. Extract structured menu information from this heavily pre-filtered content containing likely menu items.${chunkInfo}
 
 FILTERED MENU CONTENT:
-${text.substring(0, 12000)}${text.length > 12000 ? '\n[Content truncated...]' : ''}
+${text.substring(0, 8000)}${text.length > 8000 ? '\n[Content truncated...]' : ''}
 
-EXTRACT THE FOLLOWING:
-1. Menu items with names, descriptions, and prices
-2. Categories/sections (appetizers, mains, desserts, drinks, etc.)
-3. Restaurant information if available${isChunk ? ' (only if clearly visible in this chunk)' : ''}
+EXTRACTION INSTRUCTIONS:
+This content has been aggressively pre-filtered to contain mostly menu items and prices. Extract ALL food items found.
 
 PARSING RULES:
-- This content has been pre-filtered to contain mostly menu-relevant text
-- Look for food item names followed by descriptions and/or prices
-- Prices are usually in formats like: $12.95, $12, 12.95, etc.
-- Categories are usually headers or section titles
-- Items are often separated by line breaks or special formatting
-- Some menus use dots or dashes to separate names from prices
-- Extract ALL menu items found${isChunk ? '\n- For chunks: Extract ALL menu items found, even if incomplete context' : ''}
+- Look for item names followed by prices ($X.XX format)
+- Extract descriptions if present
+- Identify categories (appetizers, mains, etc.)
+- Skip non-food content${isChunk ? '\n- IMPORTANT: Extract ALL menu items from this chunk, even partial ones' : ''}
 
-RESPONSE FORMAT (JSON):
+RESPONSE FORMAT (JSON only):
 {
   "menuItems": [
     {
       "name": "Item Name",
-      "description": "Description if available",
+      "description": "Brief description",
       "price": "$12.95",
       "category": "appetizer|main|dessert|beverage|other"
     }
   ],
-  "categories": ["appetizers", "mains", "desserts"],
-  "restaurantInfo": {
-    "name": "Restaurant Name if found",
-    "phone": "Phone if found", 
-    "address": "Address if found"
-  }
+  "categories": ["category1", "category2"],
+  "restaurantInfo": {"name": "Name if found"}
 }
 
-Please respond ONLY with valid JSON.`;
+Return ONLY valid JSON.`;
   }
 
   /**
@@ -516,11 +515,32 @@ Please respond ONLY with valid JSON.`;
    */
   isNonMenuContent(line) {
     const nonMenuPatterns = [
+      // Days and times
       /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-      /^(hours|phone|address|website|email)/i,
+      /\d{1,2}:\d{2}\s*(am|pm)/i,
+      /^(hours|phone|address|website|email|fax)/i,
+      
+      // Contact info
       /^(www\.|http|@)/i,
       /^\d{3}-\d{3}-\d{4}/,
-      /^page \d+/i
+      /^\(\d{3}\)\s*\d{3}-\d{4}/,
+      
+      // Common non-menu text
+      /^page \d+/i,
+      /^(copyright|all rights reserved|terms|conditions)/i,
+      /^(thank you|please|welcome|location|directions)/i,
+      /^(we are|we're|our|about|history|since)/i,
+      
+      // Pure navigation/headers
+      /^(home|menu|contact|about|order|online)/i,
+      /^(catering|events|private|party|book)/i,
+      
+      // Addresses and locations
+      /^\d+\s+\w+\s+(street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd)/i,
+      /^\w+,\s*\w{2}\s*\d{5}/,
+      
+      // Social media
+      /^(facebook|twitter|instagram|yelp|google)/i,
     ];
     
     return nonMenuPatterns.some(pattern => pattern.test(line));
@@ -681,14 +701,20 @@ Please respond ONLY with valid JSON.`;
     const menuLines = [];
     const categories = [];
     
+    console.log(`🔍 Pre-filtering ${lines.length} lines...`);
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       
-      // Skip very short lines
-      if (line.length < 3) continue;
+      // Skip very short lines or very long lines (likely not menu items)
+      if (line.length < 5 || line.length > 200) continue;
       
-      // Skip obvious non-menu content
+      // Skip obvious non-menu content aggressively
       if (this.isNonMenuContent(line)) continue;
+      
+      // Skip lines that are just numbers, dates, or common filler
+      if (/^\d+$/.test(line) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)) continue;
+      if (/^(page|call|visit|located|open|hours|closed)/i.test(line)) continue;
       
       // Keep category headers
       if (this.looksLikeCategory(line)) {
@@ -697,29 +723,28 @@ Please respond ONLY with valid JSON.`;
         continue;
       }
       
-      // Keep lines that look like menu items
-      if (this.looksLikeMenuItem(line)) {
-        menuLines.push(line);
-        continue;
-      }
-      
-      // Keep lines with food-related keywords
-      if (this.containsFoodKeywords(line)) {
-        menuLines.push(line);
-        continue;
-      }
-      
-      // Keep lines with prices
+      // Keep lines that look like menu items (with prices)
       if (this.containsPrice(line)) {
         menuLines.push(line);
         continue;
       }
+      
+      // Keep lines with strong food indicators
+      if (this.containsFoodKeywords(line) && this.looksLikeMenuItem(line)) {
+        menuLines.push(line);
+        continue;
+      }
+      
+      // Skip everything else to be more aggressive
     }
     
-    // Add some context around menu sections
-    const contextualLines = this.addContextAroundMenuSections(lines, menuLines);
+    console.log(`📊 Pre-filtering: ${lines.length} → ${menuLines.length} lines (${Math.round((1 - menuLines.length/lines.length) * 100)}% reduction)`);
     
-    return contextualLines.join('\n');
+    // Join with newlines but don't add extra context - be aggressive
+    const filteredText = menuLines.join('\n');
+    console.log(`📏 Final filtered text: ${filteredText.length} characters`);
+    
+    return filteredText;
   }
 
   /**
@@ -733,9 +758,15 @@ Please respond ONLY with valid JSON.`;
     // - Mix of letters and possibly numbers/prices
     // - Not all caps (unless short category)
     
-    if (line.length < 5 || line.length > 150) return false;
+    if (line.length < 8 || line.length > 120) return false;
     
-    // Check for price patterns
+    // Must have letters
+    if (!/[a-zA-Z]/.test(line)) return false;
+    
+    // Skip if it's all uppercase and long (likely headers/non-menu)
+    if (line === line.toUpperCase() && line.length > 15) return false;
+    
+    // Check for price patterns (strong indicator)
     if (this.containsPrice(line)) return true;
     
     // Check for common menu item patterns
@@ -744,10 +775,12 @@ Please respond ONLY with valid JSON.`;
       /\w+.*\.\.\.\.*\$?\d+/,  // "Item ... price"
       /\w+.*-.*\$?\d+/,    // "Item - description price"
       /^[A-Z][a-z]+\s+[A-Z]/,  // "Title Case Words"
-      /\b(served|grilled|fried|baked|fresh|with|topped|sauce|cheese|chicken|beef|fish|pasta|rice)\b/i
+      /\b(served|grilled|fried|baked|fresh|with|topped|sauce|cheese)\b/i
     ];
     
-    return menuItemPatterns.some(pattern => pattern.test(line));
+    // Must match at least one pattern AND have food keywords
+    return menuItemPatterns.some(pattern => pattern.test(line)) && 
+           this.containsFoodKeywords(line);
   }
 
   /**
