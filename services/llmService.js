@@ -163,12 +163,9 @@ Return JSON: {"vegetarianItems":[{"name":"item name","category":"main"}],"restau
     // Enhancement adds complexity without significant value for users
     console.log(`[WebScraping] Analysis complete for "${restaurantName}": Found ${vegetarianAnalysis.vegetarianItems.length} vegetarian items`);
     
-    // Generate a concise restaurant summary
-    const finalSummary = `${restaurantName}: ${vegetarianAnalysis.summary} Vegetarian-friendliness: ${vegetarianAnalysis.restaurantVegFriendliness.toUpperCase()}.`;
-    
     return {
       ...vegetarianAnalysis,
-      summary: finalSummary,
+      summary: '', // Remove redundant summary
       enhancedMenuItems: menuItems // Just return original items
     };
   } catch (error) {
@@ -258,8 +255,8 @@ const checkIfVegetarianRestaurantAI = async (restaurantName, menuItems, apiKey) 
     // Take a sample of menu items to avoid large prompts - limit to 5 items
     const sampleSize = Math.min(5, menuItems.length);
     const sampleItems = menuItems.slice(0, sampleSize).map((item, index) => {
-      const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
-      const cleanDesc = (item.description || '').replace(/[^\w\s\-.,()]/g, ' ').trim().substring(0, 60);
+      const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()$€£¥₹₩¢]/g, ' ').trim();
+      const cleanDesc = (item.description || '').replace(/[^\w\s\-.,()$€£¥₹₩¢]/g, ' ').trim().substring(0, 60);
       return `${index + 1}. ${cleanName}${cleanDesc ? ': ' + cleanDesc : ''}`;
     }).join('\n');
 
@@ -403,7 +400,7 @@ const analyzeFullyVegetarianRestaurant = async (menuItems, restaurantName, apiKe
 const createVegetarianRestaurantPrompt = (menuItems, restaurantName) => {
   // Just take a sample of items to categorize, not all - limit to 5 items
   const sampleItems = menuItems.slice(0, 5).map((item, index) => {
-    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
+    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()$€£¥₹₩¢]/g, ' ').trim();
     return `${index + 1}. ${cleanName}`;
   }).join('\n');
 
@@ -558,12 +555,9 @@ const aggregateBatchResults = (batchResults) => {
     }
   }
   
-  // Create concise summary (instead of joining all batch summaries)
-  const aggregatedSummary = `Found ${vegetarianCount} vegetarian options out of ${totalItems} total items (${Math.round(vegetarianPercentage)}%).`;
-  
   return {
     vegetarianItems: allVegetarianItems,
-    summary: aggregatedSummary,
+    summary: '', // Remove redundant summary
     restaurantVegFriendliness: overallFriendliness,
     totalItems,
     confidence: avgConfidence,
@@ -733,9 +727,9 @@ const createScrapedMenuAnalysisPrompt = (menuItems, restaurantName) => {
     let desc = (item.description || 'No description').trim();
     if (desc.length > 80) desc = desc.slice(0, 80) + '...';
     
-    // Clean the item name and description to avoid issues
-    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
-    const cleanDesc = desc.replace(/[^\w\s\-.,()]/g, ' ').trim();
+    // Clean the item name and description to avoid issues (preserve currency symbols)
+    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()$€£¥₹₩¢]/g, ' ').trim();
+    const cleanDesc = desc.replace(/[^\w\s\-.,()$€£¥₹₩¢]/g, ' ').trim();
     
     return `${index + 1}. ${cleanName}: ${cleanDesc}`;
   }).join('\n');

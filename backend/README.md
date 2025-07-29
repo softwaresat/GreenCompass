@@ -1,220 +1,114 @@
-# 🍃 GreenCompass Backen## 🚀 Quick Start
+# 🍃 GreenCompass Backend
 
-### Prerequisites
-- Node.js 18+ 
-- 1GB+ RAM recommended
-- Network access between VM and frontend
-
-### VM/Network Setup
-
-1. **Find your VM's IP address:**
-   ```bash
-   hostname -I
-   # Example output: 192.168.1.100
-   ```
-
-2. **Configure frontend environment:**
-   ```bash
-   # In your frontend project, set:
-   EXPO_PUBLIC_BACKEND_URL=http://192.168.1.100:3001
-   ```
-
-### Installation
-
-A robust backend server for the GreenCompass mobile app that provides menu scraping capabilities using Playwright. This se## 📱 Mobile App Integration
-
-The server works seamlessly with the GreenCompass mobile app through the updated `webScrapingService.js`:
-
-```javascript
-import { scrapeRestaurantMenu } from './webScrapingService';
-
-// Scrape a restaurant menu (automatically uses server backend)
-const result = await scrapeRestaurantMenu('https://restaurant.com');
-```ized for reliable performance and can handle multiple concurrent requests efficiently.
+A robust Node.js backend server that provides AI-powered menu scraping using Playwright and worker threads for parallel processing.
 
 ## ✨ Features
 
-- **Playwright-powered scraping** - Advanced browser automation for complex websites
-- **RESTful API** - Clean endpoints for menu data extraction  
-- **Performance optimized** - Handles up to 10 concurrent scrapes
-- **Rate limiting** - 30 requests per minute per IP
-- **Security hardened** - CORS, helmet, input validation
-- **Health monitoring** - Built-in health checks and stats
-- **Error handling** - Comprehensive error reporting
-- **Resource management** - Automatic cleanup and memory management
+- **🎭 Playwright Web Scraping**: Advanced browser automation for complex restaurant websites
+- **🧠 AI Menu Discovery**: Intelligent identification of actual menu pages
+- **⚡ Parallel Processing**: Multi-threaded submenu scraping with up to 4 workers
+- **🤖 AI Integration**: Google Gemini for menu analysis and vegetarian detection
+- **🛡️ Production Ready**: Rate limiting, CORS, error handling, and health monitoring
 
-## � Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+ 
+- Node.js 18+
 - 1GB+ RAM recommended
-- Basic HTTP/HTTPS network access
 
-### Installation
+### Installation & Setup
 
-1. **Navigate to backend directory:**
+1. **Run the startup script:**
    ```bash
    cd backend
-   ```
-
-2. **Run the startup script:**
-   ```bash
    ./start-server.sh
    ```
-   
-   The script will automatically:
-   - Install dependencies
-   - Set up Playwright browser
-   - Create configuration file
-   - Display network access URLs
-   - Start the server
 
-3. **Manual installation (alternative):**
+2. **Manual setup (alternative):**
    ```bash
    npm install
    npm run install-browser
    cp .env.example .env
-   # Edit .env and set VM_IP=your_vm_ip_address
+   # Edit .env with your configuration
    npm start
    ```
 
 ### Verification
+- **Health check**: http://localhost:3001/health
+- **Configuration**: http://localhost:3001/api/config
 
-- **Local access:** http://localhost:3001/health
-- **Network access:** http://YOUR_VM_IP:3001/health
-- **API endpoint:** http://YOUR_VM_IP:3001/api/scrape-playwright
+## 📡 API Endpoints
 
-## 📡 API Reference
-
-### Scrape Menu Data
+### Menu Scraping (Parallel)
 ```http
-POST /api/scrape-playwright
+POST /api/scrape-menu-parallel
 Content-Type: application/json
 
 {
   "url": "https://restaurant-website.com",
   "options": {
-    "waitForSelector": ".menu-item",
-    "mobile": false,
-    "timeout": 45000
+    "mobile": true,
+    "timeout": 120000
   }
 }
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "url": "https://restaurant-website.com",
-  "menuItems": [
-    {
-      "name": "Veggie Burger",
-      "price": "$12.99",
-      "description": "Plant-based patty with fresh vegetables"
-    }
-  ],
-  "categories": ["Mains", "Appetizers"],
-  "restaurantInfo": {
-    "name": "Green Eats Restaurant"
-  },
-  "extractionTime": 3500
-}
+### Menu Scraping (Standard)
+```http
+POST /api/scrape-menu-complete
 ```
 
-### Health Check
+### Health & Configuration
 ```http
 GET /health
-```
-
-### Server Statistics  
-```http
-GET /api/stats
+GET /api/config
+GET /api/docs
 ```
 
 ## ⚙️ Configuration
 
-Copy `.env.example` to `.env` and customize:
-
+Configure via `.env`:
 ```bash
-# Server Configuration
+# Server
 PORT=3001
 NODE_ENV=production
-HOST=0.0.0.0
 
-# Network Configuration (replace with your VM's IP)
-VM_IP=192.168.1.100
+# Worker Configuration
+MAX_WORKERS=4
+ENABLE_PARALLEL_SUBMENUS=true
 
-# Performance Settings
-MAX_CONCURRENT_PAGES=10
-REQUEST_TIMEOUT=45000
-
-# Rate Limiting  
+# Performance
+REQUEST_TIMEOUT=120000
 RATE_LIMIT_REQUESTS=30
-RATE_LIMIT_WINDOW=60
 
-# Security
-FRONTEND_URL=*
-API_KEY=your_secret_key
+# AI API Keys
+GEMINI_API_KEY=your_gemini_api_key
 ```
 
-### Frontend Configuration
+## 🏭 Architecture
 
-In your React Native/Expo project, set the backend URL:
+- **Main Server**: Express.js with worker thread management
+- **Worker Pool**: ScrapingWorkerPool for parallel submenu processing
+- **AI Integration**: Google Gemini for menu discovery and analysis
+- **Intelligent Scraping**: AI-powered menu page detection and content extraction
+
+## 📱 Frontend Integration
+
+Configure your frontend to use the backend:
+```env
+EXPO_PUBLIC_BACKEND_URL=http://localhost:3001
+```
+
+The frontend `webScrapingService.js` automatically uses parallel processing when available.
+
+## 🔧 Development
 
 ```bash
-# .env or app.json
-EXPO_PUBLIC_BACKEND_URL=http://192.168.1.100:3001
+npm run dev     # Development with auto-restart
+npm test        # Run tests
+DEBUG=true npm start  # Debug mode
 ```
 
-Or in your app code:
-```javascript
-// If not set via environment, you can hardcode it
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://192.168.1.100:3001';
-```
+---
 
-## � Performance Tuning
-
-### Server Requirements
-- **CPU:** Single core sufficient, multi-core preferred
-- **Memory:** 1GB+ recommended for optimal performance
-- **Storage:** ~200MB for Playwright browser
-- **Network:** Stable internet connection
-
-### Optimization Settings
-- **Concurrent scrapes:** Up to 10 simultaneous requests
-- **Request timeout:** 45 seconds per scrape
-- **Rate limiting:** 30 requests per minute per IP
-- **Resource blocking:** Minimal blocking for better accuracy
-
-## 🛠️ Development
-
-### Local Development
-```bash
-npm run dev  # Auto-restart on changes
-```
-
-### Testing
-```bash
-npm test           # Run all tests
-npm run test:api   # API endpoint tests  
-npm run test:scraper # Scraping functionality tests
-```
-
-### Debugging
-```bash
-DEBUG=true npm start
-```
-
-## � Mobile App Integration
-
-The server works seamlessly with the GreenCompass mobile app through the `serverScrapingService.js` client:
-
-```javascript
-import serverScrapingService from './serverScrapingService';
-
-// Scrape a restaurant menu
-const result = await serverScrapingService.scrapeMenuData(
-  'https://restaurant.com',
-  { mobile: true }
-);
-```
+**Backend Status**: Production ready with intelligent parallel processing! 🚀
