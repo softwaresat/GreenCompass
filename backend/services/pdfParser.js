@@ -367,16 +367,18 @@ class PDFParser {
    */
   cleanExtractedText(text) {
     return text
-      // Remove excessive whitespace
-      .replace(/\s+/g, ' ')
       // Remove page numbers and common PDF artifacts
       .replace(/Page \d+/gi, '')
       .replace(/\d+\/\d+/g, '')
-      // Clean up common formatting issues
+      // Clean up common formatting issues but preserve line breaks
       .replace(/([a-z])([A-Z])/g, '$1 $2')
       // Remove multiple dots/dashes used for alignment
       .replace(/\.{3,}/g, ' ')
       .replace(/-{3,}/g, ' ')
+      // Clean up excessive spaces on same line but keep line breaks
+      .replace(/[ \t]+/g, ' ')
+      // Remove excessive blank lines (more than 2 consecutive)
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
       .trim();
   }
 
@@ -702,19 +704,38 @@ Return ONLY valid JSON.`;
     const categories = [];
     
     console.log(`🔍 Pre-filtering ${lines.length} lines...`);
+    console.log(`📝 Sample lines:`, lines.slice(0, 5));
+    
+    let skippedShort = 0, skippedLong = 0, skippedNonMenu = 0, skippedOther = 0;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       
       // Skip very short lines or very long lines (likely not menu items)
-      if (line.length < 5 || line.length > 200) continue;
+      if (line.length < 3) {
+        skippedShort++;
+        continue;
+      }
+      if (line.length > 300) {
+        skippedLong++;
+        continue;
+      }
       
       // Skip obvious non-menu content aggressively
-      if (this.isNonMenuContent(line)) continue;
+      if (this.isNonMenuContent(line)) {
+        skippedNonMenu++;
+        continue;
+      }
       
       // Skip lines that are just numbers, dates, or common filler
-      if (/^\d+$/.test(line) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)) continue;
-      if (/^(page|call|visit|located|open|hours|closed)/i.test(line)) continue;
+      if (/^\d+$/.test(line) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)) {
+        skippedOther++;
+        continue;
+      }
+      if (/^(page|call|visit|located|open|hours|closed)/i.test(line)) {
+        skippedOther++;
+        continue;
+      }
       
       // Keep category headers
       if (this.looksLikeCategory(line)) {
@@ -729,15 +750,17 @@ Return ONLY valid JSON.`;
         continue;
       }
       
-      // Keep lines with strong food indicators
-      if (this.containsFoodKeywords(line) && this.looksLikeMenuItem(line)) {
+      // Keep lines with strong food indicators OR prices
+      if (this.containsFoodKeywords(line) || this.looksLikeMenuItem(line)) {
         menuLines.push(line);
         continue;
       }
       
-      // Skip everything else to be more aggressive
+      // If we get here, the line was skipped for other reasons
+      skippedOther++;
     }
     
+    console.log(`📊 Pre-filtering stats: Short(${skippedShort}) Long(${skippedLong}) NonMenu(${skippedNonMenu}) Other(${skippedOther})`);
     console.log(`📊 Pre-filtering: ${lines.length} → ${menuLines.length} lines (${Math.round((1 - menuLines.length/lines.length) * 100)}% reduction)`);
     
     // Join with newlines but don't add extra context - be aggressive
@@ -756,15 +779,14 @@ Return ONLY valid JSON.`;
     // Menu items typically have:
     // - Reasonable length (not too short, not too long)
     // - Mix of letters and possibly numbers/prices
-    // - Not all caps (unless short category)
     
-    if (line.length < 8 || line.length > 120) return false;
+    if (line.length < 5 || line.length > 150) return false;
     
     // Must have letters
     if (!/[a-zA-Z]/.test(line)) return false;
     
     // Skip if it's all uppercase and long (likely headers/non-menu)
-    if (line === line.toUpperCase() && line.length > 15) return false;
+    if (line === line.toUpperCase() && line.length > 25) return false;
     
     // Check for price patterns (strong indicator)
     if (this.containsPrice(line)) return true;
@@ -778,8 +800,8 @@ Return ONLY valid JSON.`;
       /\b(served|grilled|fried|baked|fresh|with|topped|sauce|cheese)\b/i
     ];
     
-    // Must match at least one pattern AND have food keywords
-    return menuItemPatterns.some(pattern => pattern.test(line)) && 
+    // Match patterns OR have food keywords (not both required)
+    return menuItemPatterns.some(pattern => pattern.test(line)) || 
            this.containsFoodKeywords(line);
   }
 
