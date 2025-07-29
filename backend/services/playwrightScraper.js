@@ -211,6 +211,15 @@ class PlaywrightScraper {
   async scrapeMenuWithSubMenus(menuPageUrl, options = {}) {
     console.log(`🔍 Starting comprehensive menu scraping with sub-menu discovery for: ${menuPageUrl}`);
     
+    // Check if this is a PDF URL - PDFs don't have sub-menus, skip comprehensive scraping
+    if (menuPageUrl.toLowerCase().endsWith('.pdf') || menuPageUrl.toLowerCase().includes('.pdf')) {
+      console.log(`📄 PDF URL detected in comprehensive scraping - PDFs don't have sub-menus, skipping comprehensive scraping`);
+      console.log(`🔄 Delegating to direct PDF parsing instead of comprehensive scraping`);
+      
+      const pdfParser = require('./pdfParser');
+      return await pdfParser.parsePDFMenu(menuPageUrl, options);
+    }
+    
     const subMenuStartTime = Date.now();
     const allMenuItems = [];
     const allCategories = [];
