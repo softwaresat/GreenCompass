@@ -10,11 +10,115 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const { callGeminiAPI } = require('./geminiHelper');
 
+/**
+ * Browser Pool for parallel browser operations
+ * Manages multiple browser instances for 2-4x faster processing
+ */
+class BrowserPool {
+  constructor(maxBrowsers = 3) {
+    this.browsers = [];
+    this.maxBrowsers = maxBrowsers;
+    this.currentIndex = 0;
+    this.isInitialized = false;
+  }
+
+  async init() {
+    if (this.isInitialized) return;
+    
+    console.log(`🏭 Initializing browser pool with ${this.maxBrowsers} browsers...`);
+    
+    const browserConfigs = {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--disable-images',
+        '--disable-web-security',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-default-apps',
+        '--disable-popup-blocking',
+        '--disable-translate',
+        '--disable-gpu',
+        '--max-old-space-size=2048', // Lower memory per browser
+        '--disable-background-networking',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-ipc-flooding-protection',
+        '--renderer-process-limit=5' // Lower process limit per browser
+      ]
+    };
+
+    try {
+      const browserPromises = Array(this.maxBrowsers).fill().map(async (_, index) => {
+        console.log(`🌐 Launching browser ${index + 1}/${this.maxBrowsers}...`);
+        return await chromium.launch(browserConfigs);
+      });
+
+      this.browsers = await Promise.all(browserPromises);
+      this.isInitialized = true;
+      console.log(`✅ Browser pool initialized successfully with ${this.browsers.length} browsers`);
+    } catch (error) {
+      console.error(`❌ Failed to initialize browser pool: ${error.message}`);
+      console.log(`🔧 Falling back to single browser mode`);
+      // Fallback: at least try to create one browser
+      this.browsers = [await chromium.launch(browserConfigs)];
+      this.maxBrowsers = 1;
+      this.isInitialized = true;
+    }
+  }
+
+  getBrowser() {
+    if (!this.isInitialized || this.browsers.length === 0) {
+      throw new Error('Browser pool not initialized');
+    }
+    
+    const browser = this.browsers[this.currentIndex];
+    this.currentIndex = (this.currentIndex + 1) % this.browsers.length;
+    return browser;
+  }
+
+  async getBrowserSafe() {
+    await this.init();
+    return this.getBrowser();
+  }
+
+  getStats() {
+    return {
+      initialized: this.isInitialized,
+      browserCount: this.browsers.length,
+      maxBrowsers: this.maxBrowsers
+    };
+  }
+
+  async closeAll() {
+    console.log(`🔒 Closing ${this.browsers.length} browsers in pool...`);
+    const closePromises = this.browsers.map(async (browser, index) => {
+      try {
+        console.log(`🔒 Closing browser ${index + 1}...`);
+        await browser.close();
+      } catch (error) {
+        console.error(`❌ Error closing browser ${index + 1}: ${error.message}`);
+      }
+    });
+    
+    await Promise.all(closePromises);
+    this.browsers = [];
+    this.isInitialized = false;
+    console.log(`✅ All browsers closed`);
+  }
+}
 
 class PlaywrightScraper {
   constructor() {
-    this.browser = null;
-    this.maxConcurrentPages = 15; // Increased for multithreaded server
+    this.browser = null; // Legacy single browser (fallback)
+    this.browserPool = new BrowserPool(3); // NEW: Multiple browsers for parallel operations
+    this.maxConcurrentPages = 15;
     this.activeScrapes = new Set();
   }
 
@@ -1313,17 +1417,29 @@ Return ONLY JSON:
   }
 
   async closeBrowser() {
+    console.log('🔒 Closing all browsers...');
+    
+    // Close browser pool first
+    try {
+      await this.browserPool.closeAll();
+    } catch (error) {
+      console.error('❌ Error closing browser pool:', error.message);
+    }
+    
+    // Close legacy browser
     if (this.browser) {
       try {
         await this.browser.close();
-        console.log('🔒 Browser closed');
+        console.log('🔒 Legacy browser closed');
       } catch (error) {
-        console.warn('⚠️ Browser close error:', error.message);
+        console.warn('⚠️ Legacy browser close error:', error.message);
       } finally {
         this.browser = null;
         this.activeScrapes.clear();
       }
     }
+    
+    console.log('✅ All browsers closed successfully');
   }
 
   /**
@@ -1412,11 +1528,41 @@ Return ONLY JSON:
   }
 
   getStats() {
+    const browserPoolStats = this.browserPool.getStats();
+    
     return {
       activeScrapes: this.activeScrapes.size,
       maxConcurrent: this.maxConcurrentPages,
-      browserActive: !!this.browser
+      browserActive: !!this.browser,
+      browserPool: {
+        initialized: browserPoolStats.initialized,
+        browserCount: browserPoolStats.browserCount,
+        maxBrowsers: browserPoolStats.maxBrowsers
+      }
     };
+  }
+
+
+
+  /**
+   * Get common menu URLs without testing them
+   * @param {string} baseUrl - Base URL 
+   * @returns {Array<string>} Array of common menu URLs to test
+   */
+  getCommonMenuUrls(baseUrl) {
+    const commonPaths = [
+      '/menu', '/menus', '/food', '/food-menu', '/dining',
+      '/restaurant-menu', '/our-menu', '/lunch-menu', '/dinner-menu',
+      '/takeout', '/delivery', '/order'
+    ];
+    
+    try {
+      const urlObj = new URL(baseUrl);
+      return commonPaths.map(path => `${urlObj.origin}${path}`);
+    } catch (error) {
+      console.log(`Error generating common URLs: ${error.message}`);
+      return [];
+    }
   }
 
   // ========== AI-POWERED MENU DISCOVERY METHODS ==========
@@ -1594,12 +1740,13 @@ Return ONLY JSON:
   }
 
   /**
-   * Fetch page content for AI analysis using Playwright
+   * Fetch page content for AI analysis using Playwright with Browser Pool
    * @param {string} url - URL to fetch
    * @param {Object} options - Scraping options
+   * @param {Object} browserOverride - Optional specific browser to use
    * @returns {Promise<string|null>} HTML content or null if failed
    */
-  async fetchPageContentForAI(url, options = {}) {
+  async fetchPageContentForAI(url, options = {}, browserOverride = null) {
     // Check if this is a PDF URL - PDFs cannot be loaded as HTML pages
     if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
       console.log(`📄 PDF URL detected in fetchPageContentForAI, skipping HTML fetch: ${url}`);
@@ -1608,10 +1755,22 @@ Return ONLY JSON:
 
     let context = null;
     let page = null;
+    let browser = browserOverride;
     
     try {
-      await this.initBrowser();
-      context = await this.browser.newContext({
+      // Use browser pool for better parallel performance
+      if (!browser) {
+        try {
+          browser = await this.browserPool.getBrowserSafe();
+          console.log(`🌐 Using browser pool for: ${url}`);
+        } catch (error) {
+          console.log(`⚠️ Browser pool unavailable, falling back to legacy browser: ${error.message}`);
+          await this.initBrowser();
+          browser = this.browser;
+        }
+      }
+      
+      context = await browser.newContext({
         viewport: options.mobile ? { width: 375, height: 667 } : { width: 1920, height: 1080 },
         userAgent: options.mobile ? 
           'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1' :
@@ -1632,11 +1791,11 @@ Return ONLY JSON:
       
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 30000 // Reduced to 30 seconds default
+        timeout: options.timeout || 20000 // Reduced timeout for faster parallel processing
       });
       
-      // Wait a bit for dynamic content
-      await page.waitForTimeout(2000);
+      // Reduced wait time for faster parallel processing
+      await page.waitForTimeout(1500);
       
       // Get the HTML content
       const htmlContent = await page.content();

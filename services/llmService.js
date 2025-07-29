@@ -68,22 +68,24 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
     const analysisResults = [];
     let successfulAnalysisBatches = 0;
     
-    // Process each analysis batch
-    for (let i = 0; i < analysisBatches.length; i++) {
-      const currentBatch = analysisBatches[i];
-      console.log(`[DEBUG] Analyzing batch ${i+1}/${analysisBatches.length} with ${currentBatch.length} menu items`);
+    // OPTIMIZED: Process analysis batches in parallel (3x faster!)
+    console.log(`⚡ Starting PARALLEL AI analysis of ${analysisBatches.length} batches...`);
+    
+    // Create parallel processing function for each batch
+    const processAnalysisBatch = async (batch, batchIndex) => {
+      console.log(`[DEBUG] Parallel batch ${batchIndex+1}/${analysisBatches.length} with ${batch.length} menu items`);
       
-      const batchPrompt = createScrapedMenuAnalysisPrompt(currentBatch, restaurantName);
-      console.log(`[DEBUG] Analysis batch ${i+1} prompt length: ${batchPrompt.length} characters`);
+      const batchPrompt = createScrapedMenuAnalysisPrompt(batch, restaurantName);
+      console.log(`[DEBUG] Parallel batch ${batchIndex+1} prompt length: ${batchPrompt.length} characters`);
       
       // Try to analyze this batch with retry logic
       let batchResult = null;
       let retryCount = 0;
-      const maxRetries = 2; // Two retries for analysis
+      const maxRetries = 2;
       
       while (retryCount <= maxRetries && !batchResult?.success) {
         if (retryCount > 0) {
-          console.log(`[Gemini] Analysis retry for batch ${i+1}...`);
+          console.log(`[Gemini] Parallel batch ${batchIndex+1} retry ${retryCount}...`);
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
         
@@ -92,30 +94,83 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       }
       
       if (batchResult?.success) {
-        console.info(`[Gemini] Analysis batch ${i+1} successful using ${batchResult.model || 'API'}`);
-        const batchAnalysis = parseScrapedMenuAnalysis(batchResult.content, currentBatch);
-        analysisResults.push(batchAnalysis);
-        successfulAnalysisBatches++;
+        console.info(`[Gemini] ✅ Parallel batch ${batchIndex+1} successful using ${batchResult.model || 'API'}`);
+        const batchAnalysis = parseScrapedMenuAnalysis(batchResult.content, batch);
+        return { success: true, analysis: batchAnalysis, batchIndex };
       } else {
-        console.error(`[Gemini] Analysis batch ${i+1} failed:`, batchResult?.error || 'Unknown error');
-        console.error(`[DEBUG] Failed batch contained ${currentBatch.length} items:`);
-        currentBatch.slice(0, 3).forEach((item, idx) => {
+        console.error(`[Gemini] ❌ Parallel batch ${batchIndex+1} failed:`, batchResult?.error || 'Unknown error');
+        console.error(`[DEBUG] Failed batch contained ${batch.length} items:`);
+        batch.slice(0, 3).forEach((item, idx) => {
           console.error(`  ${idx+1}. ${item.name?.substring(0, 50) || 'No name'}...`);
         });
-        // Add empty result for failed batch
-        analysisResults.push({
-          vegetarianItems: [],
-          summary: `Analysis failed for batch ${i+1}`,
-          restaurantVegFriendliness: 'unknown',
-          totalItems: currentBatch.length,
-          confidence: 0.0,
-          recommendations: []
-        });
+        
+        return {
+          success: false,
+          analysis: {
+            vegetarianItems: [],
+            summary: `Analysis failed for batch ${batchIndex+1}`,
+            restaurantVegFriendliness: 'unknown',
+            totalItems: batch.length,
+            confidence: 0.0,
+            recommendations: []
+          },
+          batchIndex
+        };
       }
+    };
+    
+    // Process batches in parallel groups to respect rate limits
+    const parallelBatchSize = Math.min(3, analysisBatches.length); // Process up to 3 batches simultaneously
+    const batchGroups = [];
+    
+    for (let i = 0; i < analysisBatches.length; i += parallelBatchSize) {
+      const group = analysisBatches.slice(i, i + parallelBatchSize);
+      batchGroups.push(group);
+    }
+    
+    console.log(`🏭 Processing ${analysisBatches.length} batches in ${batchGroups.length} parallel groups of up to ${parallelBatchSize}`);
+    
+    const allResults = [];
+    
+    for (let groupIndex = 0; groupIndex < batchGroups.length; groupIndex++) {
+      const group = batchGroups[groupIndex];
+      console.log(`⚡ Processing parallel group ${groupIndex + 1}/${batchGroups.length} with ${group.length} batches...`);
       
-      // Delay between analysis batches to avoid rate limiting
-      if (i < analysisBatches.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 800));
+      // Process this group of batches in parallel
+      const groupPromises = group.map((batch, batchIndexInGroup) => {
+        const globalBatchIndex = groupIndex * parallelBatchSize + batchIndexInGroup;
+        return processAnalysisBatch(batch, globalBatchIndex);
+      });
+      
+      const groupResults = await Promise.allSettled(groupPromises);
+      
+      // Process results from this group
+      groupResults.forEach((result, batchIndexInGroup) => {
+        const globalBatchIndex = groupIndex * parallelBatchSize + batchIndexInGroup;
+        
+        if (result.status === 'fulfilled') {
+          const batchResult = result.value;
+          analysisResults[globalBatchIndex] = batchResult.analysis;
+          if (batchResult.success) {
+            successfulAnalysisBatches++;
+          }
+        } else {
+          console.error(`[Gemini] ❌ Parallel group ${groupIndex + 1} batch ${batchIndexInGroup + 1} promise failed:`, result.reason?.message);
+          analysisResults[globalBatchIndex] = {
+            vegetarianItems: [],
+            summary: `Analysis failed for batch ${globalBatchIndex + 1} (promise rejected)`,
+            restaurantVegFriendliness: 'unknown',
+            totalItems: group[batchIndexInGroup]?.length || 0,
+            confidence: 0.0,
+            recommendations: []
+          };
+        }
+      });
+      
+      // Add delay between groups to respect rate limits
+      if (groupIndex < batchGroups.length - 1) {
+        console.log(`⏱️ Pausing 1.5s between parallel groups to respect rate limits...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
     }
     

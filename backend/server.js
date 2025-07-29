@@ -136,6 +136,40 @@ class ScrapingWorkerPool {
     }
   }
 
+  async executeContentFetches(urls, options) {
+    console.log(`📄 Pre-fetching content from ${urls.length} URLs across ${this.workers.length} workers`);
+    
+    const promises = urls.map((url, index) => {
+      return new Promise((resolve, reject) => {
+        const jobId = ++this.jobId;
+        this.activeJobs.set(jobId, { resolve, reject });
+
+        // Distribute URLs across workers for content fetching
+        const worker = this.workers[index % this.workers.length];
+        
+        worker.postMessage({
+          jobId,
+          url,
+          options: { ...options, timeout: 8000 }, // Fast timeout for content fetching
+          type: 'content-fetch'
+        });
+      });
+    });
+
+    try {
+      const results = await Promise.allSettled(promises);
+      return results.map((result, index) => ({
+        url: urls[index],
+        success: result.status === 'fulfilled',
+        content: result.status === 'fulfilled' ? result.value : null,
+        error: result.status === 'rejected' ? result.reason.message : null
+      }));
+    } catch (error) {
+      console.error('🔥 Batch content fetch error:', error);
+      throw error;
+    }
+  }
+
   async shutdown() {
     console.log('🔒 Shutting down worker pool...');
     await Promise.all(this.workers.map(worker => worker.terminate()));
@@ -156,7 +190,17 @@ if (!isMainThread && workerData?.isWorker) {
       console.log(`🔧 Worker processing ${type || 'single-scrape'} job ${jobId} for: ${url}`);
       
       let result;
-      if (type === 'sub-menu-scrape') {
+      if (type === 'content-fetch') {
+        // NEW: Just fetch HTML content for AI analysis (fast operation)
+        console.log(`📄 Worker fetching content for AI analysis: ${url}`);
+        result = await playwrightScraper.fetchPageContentForAI(url, {
+          ...options,
+          timeout: 8000 // Faster timeout for content fetching
+        });
+        result.fetchType = 'content-only';
+        result.scrapingType = 'content-fetch';
+        
+      } else if (type === 'sub-menu-scrape') {
         // Enhanced scraping for sub-menu with category context
         result = await playwrightScraper.scrapeMenuDataWithMenuDetection(url, {
           ...options,
@@ -370,14 +414,16 @@ app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) 
       includeDiscovery: true
     };
 
-    // Use worker pool for CPU-intensive scraping if available
+    // Use optimized discovery with worker pool for content fetching
     let result;
     if (scrapingPool && scrapingPool.workers.length > 0) {
-      console.log(`🏭 Delegating to worker pool (${scrapingPool.workers.length} workers available)`);
-      result = await scrapingPool.execute(url, scrapingOptions);
+      console.log(`⚡ Using OPTIMIZED discovery with worker pool (${scrapingPool.workers.length} workers available)`);
+      // Make scrapingPool available to playwright scraper for content pre-fetching
+      global.scrapingPool = scrapingPool;
+      result = await playwrightScraper.findAndScrapeMenuOptimized(url, scrapingOptions);
     } else {
-      console.log(`🔧 Processing on main thread (worker pool not available)`);
-      result = await playwrightScraper.findAndScrapeMenu(url, scrapingOptions);
+      console.log(`🔧 Processing on main thread with basic optimization`);
+      result = await playwrightScraper.findAndScrapeMenuOptimized(url, scrapingOptions);
     }
     
     if (result.success) {
@@ -445,10 +491,11 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
 
     console.log(`🔍 Step 1: Discovering actual menu page (without submenu processing)...`);
     
-    // FIXED: Discover menu page but prevent internal submenu processing to use our parallel workers instead
-    const menuDiscoveryResult = await playwrightScraper.findAndScrapeMenu(url, {
+    // Use optimized discovery that can leverage pre-fetching
+    global.scrapingPool = scrapingPool;
+    const menuDiscoveryResult = await playwrightScraper.findAndScrapeMenuOptimized(url, {
       ...scrapingOptions,
-      skipSubMenus: true // Prevent internal submenu processing
+      skipSubMenus: true // Prevent internal submenu processing to use parallel workers
     });
     
     if (!menuDiscoveryResult.success) {
