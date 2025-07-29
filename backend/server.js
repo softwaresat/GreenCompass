@@ -443,21 +443,25 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
       });
     }
 
-    console.log(`🔍 Step 1: Discovering main menu and sub-menu links...`);
+    console.log(`🔍 Step 1: Discovering actual menu page first...`);
     
-    // First, discover sub-menu links using main thread
-    const mainResult = await playwrightScraper.scrapeMenuData(url, { ...scrapingOptions, skipDiscovery: true });
+    // FIXED: First properly discover the actual menu page using AI (not assume homepage is menu)
+    const menuDiscoveryResult = await playwrightScraper.findAndScrapeMenu(url, scrapingOptions);
     
-    if (!mainResult.success) {
-      return res.json(mainResult);
+    if (!menuDiscoveryResult.success) {
+      return res.json(menuDiscoveryResult);
     }
 
-    // Find sub-menu links
-    const subMenuLinks = await playwrightScraper.findSubMenuLinks(url, scrapingOptions);
+    // Use the discovered menu page URL for finding sub-menu links
+    const discoveredMenuUrl = menuDiscoveryResult.menuPageUrl || url;
+    console.log(`📍 Using discovered menu page for sub-menu search: ${discoveredMenuUrl}`);
+    
+    // Find sub-menu links from the ACTUAL menu page, not the homepage
+    const subMenuLinks = await playwrightScraper.findSubMenuLinks(discoveredMenuUrl, scrapingOptions);
     
     if (!subMenuLinks || subMenuLinks.length === 0) {
-      console.log(`📋 No sub-menu links found, returning main menu only`);
-      return res.json(mainResult);
+      console.log(`📋 No sub-menu links found, returning discovered menu only`);
+      return res.json(menuDiscoveryResult);
     }
 
     console.log(`🏭 Step 2: Distributing ${subMenuLinks.length} sub-menus across ${scrapingPool.workers.length} workers`);
@@ -465,9 +469,9 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
     // Execute sub-menu scraping in parallel across workers
     const parallelResults = await scrapingPool.executeParallel(subMenuLinks, scrapingOptions);
     
-    // Combine results
-    const allMenuItems = [...(mainResult.menuItems || [])];
-    const allCategories = [...(mainResult.categories || [])];
+    // Combine results - start with the properly discovered main menu
+    const allMenuItems = [...(menuDiscoveryResult.menuItems || [])];
+    const allCategories = [...(menuDiscoveryResult.categories || [])];
     const subMenuUrls = [];
     let totalSubMenuItems = 0;
 
@@ -515,20 +519,27 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
     const uniqueCategories = [...new Set(allCategories)].filter(cat => cat && cat.length > 0);
 
     console.log(`🎯 Parallel scraping completed: ${uniqueMenuItems.length} unique items from ${subMenuUrls.length + 1} pages`);
-    console.log(`   📋 Main menu: ${mainResult.menuItems?.length || 0} items`);
+    console.log(`   📋 Discovered menu page (${discoveredMenuUrl}): ${menuDiscoveryResult.menuItems?.length || 0} items`);
     console.log(`   🏭 Sub-menus: ${totalSubMenuItems} items across ${subMenuUrls.filter(s => s.success).length} pages`);
 
     const result = {
       success: true,
       url: url,
-      menuPageUrl: url,
+      menuPageUrl: discoveredMenuUrl, // Use the properly discovered menu URL
       menuItems: uniqueMenuItems,
       categories: uniqueCategories,
-      restaurantInfo: mainResult.restaurantInfo || {},
+      restaurantInfo: menuDiscoveryResult.restaurantInfo || {},
       subMenuUrls: subMenuUrls,
       totalPagesScraped: subMenuUrls.length + 1,
       extractionTime: Date.now(),
-      discoveryMethod: 'parallel-worker-distribution',
+      discoveryMethod: `parallel-worker-distribution-with-${menuDiscoveryResult.discoveryMethod || 'menu-discovery'}`,
+      menuDiscovery: {
+        originalUrl: url,
+        discoveredMenuUrl: discoveredMenuUrl,
+        discoveryMethod: menuDiscoveryResult.discoveryMethod || 'unknown',
+        discoveryTime: menuDiscoveryResult.discoveryTime || 0,
+        aiValidation: menuDiscoveryResult.aiValidation || null
+      },
       isComprehensive: true,
       parallelProcessing: {
         workersUsed: scrapingPool.workers.length,
