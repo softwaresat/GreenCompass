@@ -494,7 +494,13 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       }
 
       try {
-        const parsedResult = JSON.parse(jsonMatch[0]);
+        const parsedResult = this.parseRobustJSON(jsonMatch[0]);
+        
+        if (!parsedResult) {
+          console.warn(`[Sub-Menu Discovery] Failed to parse JSON response`);
+          return await this.findSubMenuLinksBasic(menuPageUrl, options);
+        }
+        
         const subMenuLinks = parsedResult.subMenuLinks || [];
 
         // Validate and normalize URLs
@@ -958,14 +964,17 @@ Return ONLY JSON:
         try {
           const jsonMatch = result.content.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            return {
-              isMenu: !!parsed.isMenu,
-              confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 50,
-              reason: parsed.reason || 'AI analysis completed',
-              itemsDetected: parsed.itemsDetected || 0,
-              categoryMatch: !!parsed.categoryMatch
-            };
+            const parsed = this.parseRobustJSON(jsonMatch[0]);
+            
+            if (parsed) {
+              return {
+                isMenu: !!parsed.isMenu,
+                confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 50,
+                reason: parsed.reason || 'AI analysis completed',
+                itemsDetected: parsed.itemsDetected || 0,
+                categoryMatch: !!parsed.categoryMatch
+              };
+            }
           }
         } catch (parseError) {
           console.warn(`[Menu Detection] JSON parse error, using fallback`);
@@ -1261,6 +1270,68 @@ Return ONLY JSON:
       } finally {
         this.browser = null;
         this.activeScrapes.clear();
+      }
+    }
+  }
+
+  /**
+   * Robust JSON parsing that handles common AI response issues
+   * @param {string} jsonString - JSON string to parse
+   * @returns {Object|null} Parsed object or null if failed
+   */
+  parseRobustJSON(jsonString) {
+    try {
+      // First, try standard parsing
+      return JSON.parse(jsonString);
+    } catch (error) {
+      console.log(`[JSON Parser] Standard parse failed: ${error.message}`);
+      
+      try {
+        // Clean common JSON issues
+        let cleaned = jsonString
+          // Remove trailing commas before closing brackets/braces
+          .replace(/,(\s*[}\]])/g, '$1')
+          // Fix common quote issues
+          .replace(/'/g, '"')
+          // Remove comments
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, '')
+          // Trim whitespace
+          .trim();
+        
+        // Try parsing the cleaned version
+        return JSON.parse(cleaned);
+      } catch (cleanError) {
+        console.log(`[JSON Parser] Cleaned parse failed: ${cleanError.message}`);
+        
+        try {
+          // Extract just the JSON object/array part
+          const jsonMatch = cleaned.match(/[\{\[][\s\S]*[\}\]]/);
+          if (jsonMatch) {
+            let extracted = jsonMatch[0];
+            
+            // Fix trailing commas in the extracted part
+            extracted = extracted.replace(/,(\s*[}\]])/g, '$1');
+            
+            return JSON.parse(extracted);
+          }
+        } catch (extractError) {
+          console.log(`[JSON Parser] Extract parse failed: ${extractError.message}`);
+        }
+        
+        // Last resort: try to manually fix structure
+        try {
+          let lastResort = jsonString
+            .replace(/,(\s*[}\]])/g, '$1')  // Remove trailing commas
+            .replace(/([{,]\s*)(\w+):/g, '$1"$2":')  // Quote unquoted keys
+            .replace(/:\s*([^",\[\{\d][^",\[\}]*[^",\]\}])\s*([,\}])/g, ': "$1"$2')  // Quote unquoted string values
+            .trim();
+          
+          return JSON.parse(lastResort);
+        } catch (lastError) {
+          console.error(`[JSON Parser] All parsing attempts failed for: ${jsonString.substring(0, 200)}...`);
+          return null;
+        }
       }
     }
   }
@@ -1615,7 +1686,12 @@ Return a JSON object:
       }
       
       try {
-        const parsedResult = JSON.parse(jsonMatch[0]);
+        const parsedResult = this.parseRobustJSON(jsonMatch[0]);
+        
+        if (!parsedResult) {
+          console.warn(`[Enhanced AI Search] Failed to parse JSON response for ${url}`);
+          return null;
+        }
         
         // Validate and normalize URLs
         if (parsedResult.menuUrls) {
@@ -1739,7 +1815,13 @@ Return ONLY a JSON object:
       }
       
       try {
-        const parsedResult = JSON.parse(jsonMatch[0]);
+        const parsedResult = this.parseRobustJSON(jsonMatch[0]);
+        
+        if (!parsedResult) {
+          console.warn(`[AI Menu Check] Failed to parse JSON response for ${url}`);
+          return null;
+        }
+        
         console.log(`[AI Menu Check] ${url} -> isMenu: ${parsedResult.isMenu}, confidence: ${parsedResult.confidence}%`);
         return parsedResult;
       } catch (parseError) {

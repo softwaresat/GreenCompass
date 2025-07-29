@@ -446,7 +446,12 @@ Return ONLY valid JSON.`;
         cleanContent = cleanContent.substring(jsonStart, jsonEnd);
       }
       
-      const parsed = JSON.parse(cleanContent);
+      const parsed = this.parseRobustJSON(cleanContent);
+      
+      if (!parsed) {
+        console.error(`❌ Failed to parse AI response JSON`);
+        return { menuItems: [], categories: [], restaurantInfo: {} };
+      }
       
       return {
         menuItems: Array.isArray(parsed.menuItems) ? parsed.menuItems : [],
@@ -843,6 +848,57 @@ Return ONLY valid JSON.`;
     ];
     
     return pricePatterns.some(pattern => pattern.test(line));
+  }
+
+  /**
+   * Robust JSON parsing that handles common AI response issues
+   * @param {string} jsonString - JSON string to parse
+   * @returns {Object|null} Parsed object or null if failed
+   */
+  parseRobustJSON(jsonString) {
+    try {
+      // First, try standard parsing
+      return JSON.parse(jsonString);
+    } catch (error) {
+      console.log(`[PDF JSON Parser] Standard parse failed: ${error.message}`);
+      
+      try {
+        // Clean common JSON issues
+        let cleaned = jsonString
+          // Remove trailing commas before closing brackets/braces
+          .replace(/,(\s*[}\]])/g, '$1')
+          // Fix common quote issues
+          .replace(/'/g, '"')
+          // Remove comments
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, '')
+          // Trim whitespace
+          .trim();
+        
+        // Try parsing the cleaned version
+        return JSON.parse(cleaned);
+      } catch (cleanError) {
+        console.log(`[PDF JSON Parser] Cleaned parse failed: ${cleanError.message}`);
+        
+        try {
+          // Extract just the JSON object/array part
+          const jsonMatch = cleaned.match(/[\{\[][\s\S]*[\}\]]/);
+          if (jsonMatch) {
+            let extracted = jsonMatch[0];
+            
+            // Fix trailing commas in the extracted part
+            extracted = extracted.replace(/,(\s*[}\]])/g, '$1');
+            
+            return JSON.parse(extracted);
+          }
+        } catch (extractError) {
+          console.log(`[PDF JSON Parser] Extract parse failed: ${extractError.message}`);
+        }
+        
+        console.error(`[PDF JSON Parser] All parsing attempts failed for: ${jsonString.substring(0, 200)}...`);
+        return null;
+      }
+    }
   }
 
   /**
