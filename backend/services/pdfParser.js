@@ -19,11 +19,9 @@ class PDFParser {
    */
   async parsePDFMenu(pdfUrl, options = {}) {
     const startTime = Date.now();
-    const callId = Math.random().toString(36).substr(2, 9);
     
     try {
-      console.log(`📄 [${callId}] Starting PDF menu parsing for: ${pdfUrl}`);
-      console.log(`📄 [${callId}] Call stack trace:`, new Error().stack.split('\n').slice(1, 4).map(line => line.trim()).join(' -> '));
+      console.log(`📄 Starting PDF menu parsing for: ${pdfUrl}`);
       
       // Download PDF
       const pdfBuffer = await this.downloadPDF(pdfUrl);
@@ -35,8 +33,6 @@ class PDFParser {
       const menuData = await this.parseMenuFromText(extractedText, options);
       
       const totalTime = Date.now() - startTime;
-      
-      console.log(`📄 [${callId}] PDF parsing completed in ${totalTime}ms`);
       
       return {
         success: true,

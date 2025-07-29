@@ -95,7 +95,22 @@ class PlaywrightScraper {
             if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 75) {
               console.log(`✅ AI confirmed original URL is a menu page: ${url} (confidence: ${isMenuResult.confidence}%)`);
               
-              // Now check for sub-menus on this validated menu page
+              // Check if this is a PDF - PDFs don't have sub-menus, so skip comprehensive scraping
+              if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+                console.log(`📄 PDF confirmed as menu - skipping sub-menu discovery since PDFs don't have sub-menus`);
+                return {
+                  ...originalResult,
+                  menuPageUrl: url,
+                  discoveryMethod: 'original-url-ai-validated-pdf-direct',
+                  discoveryTime: Date.now() - discoveryStartTime,
+                  aiValidation: {
+                    confidence: isMenuResult.confidence,
+                    reason: isMenuResult.reason
+                  }
+                };
+              }
+              
+              // For non-PDF URLs, check for sub-menus on this validated menu page
               const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
               
               return {
@@ -115,6 +130,18 @@ class PlaywrightScraper {
           }
         } else {
           console.log(`⚠️ No Gemini API key configured, skipping AI validation for original URL`);
+          
+          // Check if this is a PDF - PDFs don't have sub-menus, so skip comprehensive scraping
+          if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
+            console.log(`📄 PDF without AI validation - skipping sub-menu discovery since PDFs don't have sub-menus`);
+            return {
+              ...originalResult,
+              menuPageUrl: url,
+              discoveryMethod: 'original-url-unvalidated-pdf-direct',
+              discoveryTime: Date.now() - discoveryStartTime
+            };
+          }
+          
           // Without AI validation, we'll still return the result but with lower confidence
           const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
           return {
@@ -139,7 +166,19 @@ class PlaywrightScraper {
           if (result.success && result.menuItems && result.menuItems.length > 0) {
             console.log(`✅ Menu found at AI-discovered URL ${aiMenuUrl}: ${result.menuItems.length} items`);
             
-            // Now check for sub-menus on this discovered menu page
+            // Check if this is a PDF - PDFs don't have sub-menus, so skip comprehensive scraping
+            if (aiMenuUrl.toLowerCase().endsWith('.pdf') || aiMenuUrl.toLowerCase().includes('.pdf')) {
+              console.log(`📄 PDF discovered - skipping sub-menu discovery since PDFs don't have sub-menus`);
+              return {
+                ...result,
+                url: url, // Keep original URL
+                menuPageUrl: aiMenuUrl,
+                discoveryMethod: 'ai-discovery-pdf-direct',
+                discoveryTime: Date.now() - discoveryStartTime
+              };
+            }
+            
+            // For non-PDF URLs, check for sub-menus on this discovered menu page
             const comprehensiveResult = await this.scrapeMenuWithSubMenus(aiMenuUrl, options);
             
             return {
@@ -165,7 +204,19 @@ class PlaywrightScraper {
         const result = await this.scrapeMenuData(aiCommonResult, { ...options, skipDiscovery: true });
         
         if (result.success) {
-          // Now check for sub-menus on this common path menu page
+          // Check if this is a PDF - PDFs don't have sub-menus, so skip comprehensive scraping
+          if (aiCommonResult.toLowerCase().endsWith('.pdf') || aiCommonResult.toLowerCase().includes('.pdf')) {
+            console.log(`📄 PDF found via common path - skipping sub-menu discovery since PDFs don't have sub-menus`);
+            return {
+              ...result,
+              url: url, // Keep original URL
+              menuPageUrl: aiCommonResult,
+              discoveryMethod: 'ai-common-path-pdf-direct',
+              discoveryTime: Date.now() - discoveryStartTime
+            };
+          }
+          
+          // For non-PDF URLs, check for sub-menus on this common path menu page
           const comprehensiveResult = await this.scrapeMenuWithSubMenus(aiCommonResult, options);
           
           return {
