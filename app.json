@@ -22,8 +22,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.FOREGROUND_SERVICE"
       ],
-      "package": "com.anonymous.GreenCompass",
-      "usesCleartextTraffic": true
+      "package": "com.anonymous.GreenCompass"
     },
     "web": {
       "bundler": "metro",
@@ -48,6 +47,14 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],
