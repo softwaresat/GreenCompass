@@ -127,7 +127,21 @@ class PlaywrightScraper {
                 };
               }
               
-              // For non-PDF URLs, check for sub-menus on this validated menu page
+              // For non-PDF URLs, check for sub-menus on this validated menu page (unless skipped for parallel processing)
+              if (options.skipSubMenus) {
+                console.log(`🔄 Skipping internal submenu processing for parallel worker distribution`);
+                return {
+                  ...originalResult,
+                  menuPageUrl: url,
+                  discoveryMethod: 'original-url-ai-validated-no-submenus',
+                  discoveryTime: Date.now() - discoveryStartTime,
+                  aiValidation: {
+                    confidence: isMenuResult.confidence,
+                    reason: isMenuResult.reason
+                  }
+                };
+              }
+              
               const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
               
               return {
@@ -159,7 +173,17 @@ class PlaywrightScraper {
             };
           }
           
-          // Without AI validation, we'll still return the result but with lower confidence
+          // Without AI validation, we'll still return the result but with lower confidence (unless skipped for parallel processing)
+          if (options.skipSubMenus) {
+            console.log(`🔄 Skipping internal submenu processing (unvalidated) for parallel worker distribution`);
+            return {
+              ...originalResult,
+              menuPageUrl: url,
+              discoveryMethod: 'original-url-unvalidated-no-submenus',
+              discoveryTime: Date.now() - discoveryStartTime
+            };
+          }
+          
           const comprehensiveResult = await this.scrapeMenuWithSubMenus(url, options);
           return {
             ...comprehensiveResult,
@@ -195,7 +219,18 @@ class PlaywrightScraper {
               };
             }
             
-            // For non-PDF URLs, check for sub-menus on this discovered menu page
+            // For non-PDF URLs, check for sub-menus on this discovered menu page (unless skipped for parallel processing)
+            if (options.skipSubMenus) {
+              console.log(`🔄 Skipping internal submenu processing (AI-discovered) for parallel worker distribution`);
+              return {
+                ...result,
+                url: url, // Keep original URL
+                menuPageUrl: aiMenuUrl,
+                discoveryMethod: 'ai-discovery-no-submenus',
+                discoveryTime: Date.now() - discoveryStartTime
+              };
+            }
+            
             const comprehensiveResult = await this.scrapeMenuWithSubMenus(aiMenuUrl, options);
             
             return {

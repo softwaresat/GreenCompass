@@ -443,18 +443,21 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
       });
     }
 
-    console.log(`🔍 Step 1: Discovering actual menu page first...`);
+    console.log(`🔍 Step 1: Discovering actual menu page (without submenu processing)...`);
     
-    // FIXED: First properly discover the actual menu page using AI (not assume homepage is menu)
-    const menuDiscoveryResult = await playwrightScraper.findAndScrapeMenu(url, scrapingOptions);
+    // FIXED: Discover menu page but prevent internal submenu processing to use our parallel workers instead
+    const menuDiscoveryResult = await playwrightScraper.findAndScrapeMenu(url, {
+      ...scrapingOptions,
+      skipSubMenus: true // Prevent internal submenu processing
+    });
     
     if (!menuDiscoveryResult.success) {
       return res.json(menuDiscoveryResult);
     }
 
-    // Use the discovered menu page URL for finding sub-menu links
+    // Use the discovered menu page URL for finding sub-menu links  
     const discoveredMenuUrl = menuDiscoveryResult.menuPageUrl || url;
-    console.log(`📍 Using discovered menu page for sub-menu search: ${discoveredMenuUrl}`);
+    console.log(`📍 Using discovered menu page for parallel sub-menu search: ${discoveredMenuUrl}`);
     
     // Find sub-menu links from the ACTUAL menu page, not the homepage
     const subMenuLinks = await playwrightScraper.findSubMenuLinks(discoveredMenuUrl, scrapingOptions);
