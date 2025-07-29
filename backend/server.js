@@ -475,7 +475,6 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
     // Combine results - start with the properly discovered main menu
     const allMenuItems = [...(menuDiscoveryResult.menuItems || [])];
     const allCategories = [...(menuDiscoveryResult.categories || [])];
-    let extractedWebsiteCategories = [];
     const subMenuUrls = [];
     let totalSubMenuItems = 0;
 
@@ -492,11 +491,6 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
         
         allMenuItems.push(...categorizedItems);
         allCategories.push(...(subResult.data.categories || []));
-        
-        // Collect extracted categories from AI analysis if available
-        if (subResult.data.extractedCategories) {
-          extractedWebsiteCategories.push(...subResult.data.extractedCategories);
-        }
         
         if (subResult.category) {
           allCategories.push(subResult.category);
@@ -525,17 +519,7 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
 
     // Deduplicate results
     const uniqueMenuItems = playwrightScraper.deduplicateMenuItems(allMenuItems);
-    
-    // Prefer extracted website categories over scraped HTML categories when available
-    const uniqueExtractedCategories = [...new Set(extractedWebsiteCategories)].filter(cat => cat && cat.length > 0);
-    const uniqueScrapedCategories = [...new Set(allCategories)].filter(cat => cat && cat.length > 0);
-    
-    // Use extracted categories if we have them, otherwise fall back to scraped categories
-    const finalCategories = uniqueExtractedCategories.length > 0 ? uniqueExtractedCategories : uniqueScrapedCategories;
-    
-    console.log(`📋 Categories: ${uniqueExtractedCategories.length} extracted from AI, ${uniqueScrapedCategories.length} scraped from HTML`);
-    console.log(`📋 Using ${finalCategories.length} final categories: ${finalCategories.join(', ')}`);
-    const uniqueCategories = finalCategories;
+    const uniqueCategories = [...new Set(allCategories)].filter(cat => cat && cat.length > 0);
 
     console.log(`🎯 Parallel scraping completed: ${uniqueMenuItems.length} unique items from ${subMenuUrls.length + 1} pages`);
     console.log(`   📋 Discovered menu page (${discoveredMenuUrl}): ${menuDiscoveryResult.menuItems?.length || 0} items`);

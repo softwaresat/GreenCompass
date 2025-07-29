@@ -346,8 +346,7 @@ Analyze and respond with JSON:
   "vegetarianCount": number,
   "vegFriendliness": "excellent|good|fair|poor",
   "confidence": 0.8,
-  "summary": "Detailed summary of vegetarian options",
-  "extractedCategories": ["List of menu categories found on the website if any"]
+  "summary": "Detailed summary of vegetarian options"
 }
 
 Categories:

@@ -527,7 +527,6 @@ const splitIntoBatches = (arr, batchSize) => {
 const aggregateBatchResults = (batchResults) => {
   const allVegetarianItems = batchResults.flatMap(r => r.vegetarianItems || []);
   const allRecommendations = batchResults.flatMap(r => r.recommendations || []);
-  const allExtractedCategories = batchResults.flatMap(r => r.extractedCategories || []);
   const confidences = batchResults.map(r => r.confidence).filter(c => typeof c === 'number');
   const totalItems = batchResults.reduce((sum, r) => sum + (r.totalItems || 0), 0);
   
@@ -569,7 +568,6 @@ const aggregateBatchResults = (batchResults) => {
     totalItems,
     confidence: avgConfidence,
     recommendations: Array.from(new Set(allRecommendations)), // Remove duplicates
-    extractedCategories: Array.from(new Set(allExtractedCategories.filter(cat => cat && cat.length > 0))), // Remove duplicates and empty categories
   };
 };
 
@@ -805,8 +803,7 @@ RESPONSE FORMAT (JSON):
   "restaurantVegFriendliness": "excellent|good|fair|limited",
   "totalItems": 12,
   "confidence": 0.85,
-  "recommendations": ["Specific recommendations for vegetarians"],
-  "extractedCategories": ["List of menu categories found on the website if any"]
+  "recommendations": ["Specific recommendations for vegetarians"]
 }
 
 IMPORTANT: 
@@ -1025,8 +1022,7 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       restaurantVegFriendliness: parsed.restaurantVegFriendliness || 'fair',
       totalItems: parsed.totalItems || parsed.vegetarianItems?.length || 0,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
-      extractedCategories: Array.isArray(parsed.extractedCategories) ? parsed.extractedCategories : []
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
     };
     
     
@@ -1042,8 +1038,7 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       restaurantVegFriendliness: 'unknown',
       totalItems: menuItems.length,
       confidence: 0.0,
-      recommendations: [],
-      extractedCategories: []
+      recommendations: []
     };
   }
 };
