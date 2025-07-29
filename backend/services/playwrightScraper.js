@@ -554,7 +554,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       page = await context.newPage();
       await page.goto(menuPageUrl, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 30000 
+        timeout: options.timeout || 120000 
       });
       
       await page.waitForTimeout(2000);
@@ -730,7 +730,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       page = await context.newPage();
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 30000 
+        timeout: options.timeout || 120000 
       });
       
       // Wait a bit for dynamic content
@@ -828,8 +828,8 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       });
       
       page = await context.newPage();
-      page.setDefaultTimeout(45000);
-      page.setDefaultNavigationTimeout(45000);
+      page.setDefaultTimeout(120000);
+      page.setDefaultNavigationTimeout(120000);
       
       // Block heavy media content
       await page.route('**/*', (route) => {
@@ -844,7 +844,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
       console.log(`🌐 Navigating to: ${url}`);
       await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: 45000
+        timeout: 120000
       });
       
       // Wait for dynamic content
@@ -1049,9 +1049,9 @@ Return ONLY JSON:
       
       page = await context.newPage();
       
-      // Set reasonable timeouts
-      page.setDefaultTimeout(45000);
-      page.setDefaultNavigationTimeout(45000);
+      // Set extended timeouts for complex operations
+      page.setDefaultTimeout(120000);
+      page.setDefaultNavigationTimeout(120000);
       
       // Block only heavy media content (keep stylesheets for layout)
       await page.route('**/*', (route) => {
@@ -1080,14 +1080,14 @@ Return ONLY JSON:
       console.log(`🌐 Navigating to: ${url}`);
       await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: 45000
+        timeout: 120000
       });
       
       // Wait for selector if provided
       if (options.waitForSelector) {
         try {
           await page.waitForSelector(options.waitForSelector, { 
-            timeout: 10000,
+            timeout: 30000,
             state: 'visible'
           });
           console.log(`✅ Found selector: ${options.waitForSelector}`);
@@ -1486,7 +1486,7 @@ Return ONLY JSON:
       
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
-        timeout: options.timeout || 30000 
+        timeout: options.timeout || 120000 
       });
       
       // Wait a bit for dynamic content

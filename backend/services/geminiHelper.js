@@ -22,12 +22,12 @@ async function callGeminiAPI(prompt, apiKey, context = 'analysis') {
     }]
   };
   
-  // Common request config - longer timeout for PDF parsing
+  // Common request config - much longer timeout for all operations
   const requestConfig = {
     headers: {
       'Content-Type': 'application/json',
     },
-    timeout: context.includes('PDF') ? 25000 : 15000, // 25s for PDF parsing, 15s for others
+    timeout: context.includes('PDF') ? 120000 : 60000, // 2min for PDF parsing, 1min for others
   };
   
   // Models to try in order of preference
