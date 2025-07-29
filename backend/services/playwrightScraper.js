@@ -1690,6 +1690,13 @@ PRIORITY ORDER:
 Return maximum 5 URLs, highest confidence first!`;
 
       console.log(`[Enhanced AI Search] Analyzing page structure for: ${url}`);
+      
+      // Debug: Log what HTML we're actually getting
+      console.log(`[Enhanced AI Search Debug] Enhanced HTML length: ${enhancedHtml.length} chars`);
+      console.log(`[Enhanced AI Search Debug] Text content length: ${textContent.length} chars`);
+      console.log(`[Enhanced AI Search Debug] Enhanced HTML sample (first 3000 chars):`);
+      console.log(enhancedHtml.substring(0, 3000));
+      
       const result = await callGeminiAPI(prompt, apiKey, 'enhanced menu search');
       
       if (!result.success) {
@@ -1863,69 +1870,73 @@ Return ONLY a JSON object:
     cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
     cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
     
-    const importantElements = [];
+    // For debugging, let's be less restrictive and include more content
+    // Instead of extracting specific patterns, let's include larger chunks of the page
     
-    // Get ALL links first - don't filter yet, let AI decide!
-    const linkPattern = /<a[^>]*href[^>]*>[\s\S]*?<\/a>/gi;
-    const allLinks = cleaned.match(linkPattern) || [];
-    importantElements.push(...allLinks);
-    
-    // Get ALL buttons and clickable elements - enhanced for clickable divs
-    const buttonPatterns = [
-      /<button[^>]*>[\s\S]*?<\/button>/gi,
-      /<input[^>]*type\s*=\s*["'](?:button|submit|image)["'][^>]*>/gi,
-      // Enhanced patterns for clickable divs
-      /<div[^>]*(?:onclick|role\s*=\s*["']button["']|data-[^>]*click|tabindex)[^>]*>[\s\S]*?<\/div>/gi,
-      /<span[^>]*(?:onclick|role\s*=\s*["']button["']|data-[^>]*click|tabindex)[^>]*>[\s\S]*?<\/span>/gi,
-      // Look for divs/spans with clickable classes or menu-related classes
-      /<div[^>]*class[^>]*(?:btn|button|click|menu-item|nav-item|menu-link|menu-btn|clickable|pointer)[^>]*>[\s\S]*?<\/div>/gi,
-      /<span[^>]*class[^>]*(?:btn|button|click|menu-item|nav-item|menu-link|menu-btn|clickable|pointer)[^>]*>[\s\S]*?<\/span>/gi,
-      /<a[^>]*class[^>]*(?:btn|button|menu-btn|nav-btn)[^>]*>[\s\S]*?<\/a>/gi,
-      // Look for ANY div/span that contains the word "menu" in text content
-      /<div[^>]*>[^<]*[Mm][Ee][Nn][Uu][^<]*<\/div>/gi,
-      /<span[^>]*>[^<]*[Mm][Ee][Nn][Uu][^<]*<\/span>/gi
-    ];
-    
-    buttonPatterns.forEach(pattern => {
-      const matches = cleaned.match(pattern) || [];
-      importantElements.push(...matches);
-    });
-    
-    // Navigation structures 
+    // Get navigation and header sections (more broadly)
+    const navSections = [];
     const navPatterns = [
       /<nav[^>]*>[\s\S]*?<\/nav>/gi,
       /<header[^>]*>[\s\S]*?<\/header>/gi,
-      /<footer[^>]*>[\s\S]*?<\/footer>/gi,
-      /<div[^>]*class[^>]*(?:nav|menu|header|main-nav|primary-nav|navigation|topbar|menubar)[^>]*>[\s\S]*?<\/div>/gi,
-      /<ul[^>]*class[^>]*(?:nav|menu|main-menu|primary-menu|navigation)[^>]*>[\s\S]*?<\/ul>/gi,
-      /<ol[^>]*class[^>]*(?:nav|menu|main-menu|primary-menu|navigation)[^>]*>[\s\S]*?<\/ol>/gi
+      /<div[^>]*(?:class|id)[^>]*(?:nav|menu|header|main-nav|primary-nav|navigation|topbar|menubar)[^>]*>[\s\S]*?<\/div>/gi,
     ];
     
     navPatterns.forEach(pattern => {
       const matches = cleaned.match(pattern) || [];
-      importantElements.push(...matches);
+      navSections.push(...matches);
     });
     
-    // Main content areas and sections
+    // Get main content areas
+    const contentSections = [];
     const contentPatterns = [
       /<main[^>]*>[\s\S]*?<\/main>/gi,
-      /<section[^>]*>[\s\S]*?<\/section>/gi,
-      /<article[^>]*>[\s\S]*?<\/article>/gi,
-      /<div[^>]*class[^>]*(?:content|main|hero|featured|banner|intro|home)[^>]*>[\s\S]*?<\/div>/gi,
-      /<div[^>]*id[^>]*(?:content|main|hero|featured|banner|intro|home)[^>]*>[\s\S]*?<\/div>/gi
+      /<div[^>]*(?:class|id)[^>]*(?:content|main|hero|featured|banner|intro|home)[^>]*>[\s\S]*?<\/div>/gi,
     ];
     
     contentPatterns.forEach(pattern => {
       const matches = cleaned.match(pattern) || [];
-      importantElements.push(...matches);
+      contentSections.push(...matches);
     });
     
-    // Remove duplicates and limit size
-    const uniqueElements = [...new Set(importantElements)];
-    let result = uniqueElements.join('\n').substring(0, 25000);
+    // Get ALL divs that might contain "menu" text (be very broad)
+    const menuDivs = cleaned.match(/<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi) || [];
     
-    if (result.length >= 25000) {
+    // Get ALL links and buttons (be very broad)
+    const allInteractive = [];
+    const interactivePatterns = [
+      /<a[^>]*>[\s\S]*?<\/a>/gi,
+      /<button[^>]*>[\s\S]*?<\/button>/gi,
+      /<div[^>]*(?:onclick|data-|class)[^>]*>[\s\S]*?<\/div>/gi,
+    ];
+    
+    interactivePatterns.forEach(pattern => {
+      const matches = cleaned.match(pattern) || [];
+      allInteractive.push(...matches);
+    });
+    
+    // Combine all sections
+    const allSections = [
+      ...navSections,
+      ...contentSections, 
+      ...menuDivs,
+      ...allInteractive
+    ];
+    
+    // Remove duplicates and create result
+    const uniqueSections = [...new Set(allSections)];
+    let result = uniqueSections.join('\n\n').substring(0, 30000);
+    
+    if (result.length >= 30000) {
       result += '\n...[Content truncated for AI analysis]';
+    }
+    
+    // If we got very little content, fall back to a larger chunk of raw HTML
+    if (result.length < 1000) {
+      console.log(`[Enhanced AI Search Debug] Got very little enhanced HTML (${result.length} chars), using raw HTML chunk`);
+      result = cleaned.substring(0, 20000);
+      if (cleaned.length > 20000) {
+        result += '\n...[Raw HTML truncated]';
+      }
     }
     
     return result;
