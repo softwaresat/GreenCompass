@@ -34,8 +34,34 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
     // First, analyze menu items for vegetarian options with batching
     console.log(`[WebScraping] Analyzing ${menuItems.length} menu items from "${restaurantName}" for vegetarian options...`);
     
+    // Log sample menu items for debugging problematic restaurants
+    console.log(`[DEBUG] Sample menu items from "${restaurantName}":`);
+    menuItems.slice(0, 5).forEach((item, i) => {
+      const nameLength = item.name?.length || 0;
+      const descLength = item.description?.length || 0;
+      console.log(`  ${i+1}. "${item.name?.substring(0, 40) || 'No name'}${nameLength > 40 ? '...' : ''}" (name: ${nameLength} chars, desc: ${descLength} chars)`);
+    });
+    
+    // Let AI determine if this is a fully vegetarian restaurant first
+    console.log(`[DEBUG] Checking if "${restaurantName}" is a fully vegetarian restaurant using AI...`);
+    const vegetarianCheck = await checkIfVegetarianRestaurantAI(restaurantName, menuItems, apiKey);
+    
+    if (vegetarianCheck.isVegetarianRestaurant) {
+      console.log(`[DEBUG] AI determined "${restaurantName}" is a fully vegetarian restaurant - using optimized analysis`);
+      const vegRestaurantResult = await analyzeFullyVegetarianRestaurant(menuItems, restaurantName, apiKey);
+      if (vegRestaurantResult) {
+        return {
+          ...vegRestaurantResult,
+          enhancedMenuItems: menuItems // No need to enhance, just return original items
+        };
+      }
+      console.warn(`[DEBUG] Vegetarian restaurant optimization failed, falling back to standard analysis`);
+    } else {
+      console.log(`[DEBUG] AI determined "${restaurantName}" is NOT a fully vegetarian restaurant (${vegetarianCheck.confidence} confidence)`);
+    }
+    
     // Use smaller batching for initial analysis to prevent timeouts
-    const analysisBatchSize = 60; // Reduced batch size to prevent large prompts and timeouts
+    const analysisBatchSize = 15; // Even smaller batch size for most problematic restaurants
     const analysisBatches = splitIntoBatches(menuItems, analysisBatchSize);
     console.log(`[DEBUG] Split ${menuItems.length} menu items into ${analysisBatches.length} batches of up to ${analysisBatchSize} items each for analysis`);
     
@@ -71,7 +97,11 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
         analysisResults.push(batchAnalysis);
         successfulAnalysisBatches++;
       } else {
-        console.warn(`[Gemini] Analysis batch ${i+1} failed:`, batchResult?.error || 'Unknown error');
+        console.error(`[Gemini] Analysis batch ${i+1} failed:`, batchResult?.error || 'Unknown error');
+        console.error(`[DEBUG] Failed batch contained ${currentBatch.length} items:`);
+        currentBatch.slice(0, 3).forEach((item, idx) => {
+          console.error(`  ${idx+1}. ${item.name?.substring(0, 50) || 'No name'}...`);
+        });
         // Add empty result for failed batch
         analysisResults.push({
           vegetarianItems: [],
@@ -97,7 +127,35 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       vegetarianAnalysis = aggregateBatchResults(analysisResults);
       console.log(`[DEBUG] Aggregated analysis: ${vegetarianAnalysis.vegetarianItems.length} vegetarian items, ${vegetarianAnalysis.restaurantVegFriendliness} friendliness`);
     } else {
-      throw new Error('All analysis batches failed - unable to identify vegetarian options');
+      console.warn(`[Gemini] All analysis batches failed for "${restaurantName}". Attempting fallback analysis...`);
+      
+      // First, try to see if this might actually be a vegetarian restaurant that we missed
+      console.log(`[DEBUG] Attempting AI-powered vegetarian restaurant fallback for "${restaurantName}"`);
+      const fallbackVegCheck = await checkIfVegetarianRestaurantAI(restaurantName, menuItems, apiKey);
+      if (fallbackVegCheck.isVegetarianRestaurant && fallbackVegCheck.confidence > 0.7) {
+        console.log(`[Gemini] AI fallback confirmed vegetarian restaurant with ${fallbackVegCheck.confidence} confidence`);
+        const vegFallbackResult = await analyzeFullyVegetarianRestaurant(menuItems, restaurantName, apiKey);
+        if (vegFallbackResult) {
+          console.log(`[Gemini] Vegetarian restaurant fallback succeeded!`);
+          vegetarianAnalysis = vegFallbackResult;
+        }
+      } else {
+        // Last resort: try analyzing just the first few items with a very simple prompt
+        const fallbackItems = menuItems.slice(0, 10); // Just first 10 items
+        const fallbackPrompt = `Analyze these ${fallbackItems.length} menu items from "${restaurantName}". Return only items that are 100% vegetarian (no meat, fish, poultry):
+${fallbackItems.map((item, i) => `${i+1}. ${item.name}`).join('\n')}
+
+Return JSON: {"vegetarianItems":[{"name":"item name","category":"main"}],"restaurantVegFriendliness":"limited","totalItems":${menuItems.length},"confidence":0.3}`;
+        
+        const fallbackResult = await callGeminiAPI(fallbackPrompt, apiKey);
+        if (fallbackResult?.success) {
+          console.log(`[Gemini] Final fallback analysis succeeded`);
+          vegetarianAnalysis = parseScrapedMenuAnalysis(fallbackResult.content, fallbackItems);
+          vegetarianAnalysis.totalItems = menuItems.length; // Correct the total
+        } else {
+          throw new Error(`All analysis attempts failed for "${restaurantName}" - unable to identify vegetarian options`);
+        }
+      }
     }
     
     // Now, try to enhance only the vegetarian items (non-blocking for overall function)
@@ -298,6 +356,265 @@ export const enhanceMenuItems = async (menuItems, restaurantName, onlyVegetarian
     // If any error occurs, return original items
     return menuItems;
   }
+};
+
+/**
+ * Use AI to determine if a restaurant is fully vegetarian
+ * @param {string} restaurantName - Name of the restaurant
+ * @param {Array} menuItems - Array of menu items
+ * @param {string} apiKey - Gemini API key
+ * @returns {Promise<Object>} Object with isVegetarianRestaurant boolean and confidence
+ */
+const checkIfVegetarianRestaurantAI = async (restaurantName, menuItems, apiKey) => {
+  try {
+    // Take a sample of menu items to avoid large prompts - limit to 5 items
+    const sampleSize = Math.min(5, menuItems.length);
+    const sampleItems = menuItems.slice(0, sampleSize).map((item, index) => {
+      const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
+      const cleanDesc = (item.description || '').replace(/[^\w\s\-.,()]/g, ' ').trim().substring(0, 60);
+      return `${index + 1}. ${cleanName}${cleanDesc ? ': ' + cleanDesc : ''}`;
+    }).join('\n');
+
+    const prompt = `Analyze "${restaurantName}" to determine if it's a fully vegetarian restaurant.
+
+RESTAURANT NAME: "${restaurantName}"
+
+SAMPLE MENU ITEMS (${sampleSize} of ${menuItems.length} total):
+${sampleItems}
+
+Please determine if this is a FULLY VEGETARIAN restaurant (where ALL menu items are vegetarian) by analyzing:
+1. Restaurant name patterns
+2. Menu item patterns 
+3. Absence of meat/fish/poultry items
+4. Overall restaurant concept
+
+A fully vegetarian restaurant would:
+- Have NO meat, poultry, fish, or seafood items
+- May focus on plant-based, vegetarian, or vegan cuisine
+- All items should be vegetarian-friendly
+
+Respond with JSON only:
+{
+  "isVegetarianRestaurant": true/false,
+  "confidence": 0.95,
+  "reasoning": "Brief explanation of the decision",
+  "evidenceForVegetarian": ["evidence supporting vegetarian restaurant"],
+  "evidenceAgainstVegetarian": ["evidence against vegetarian restaurant"]
+}`;
+
+    console.log(`[DEBUG] AI vegetarian check prompt length: ${prompt.length} characters`);
+    
+    const result = await callGeminiAPI(prompt, apiKey);
+    
+    if (result?.success) {
+      try {
+        let cleanedContent = result.content.replace(/```json\s*|\s*```/g, '').trim();
+        const jsonStart = cleanedContent.indexOf('{');
+        const jsonEnd = cleanedContent.lastIndexOf('}') + 1;
+        
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          cleanedContent = cleanedContent.substring(jsonStart, jsonEnd);
+        }
+        
+        const parsed = JSON.parse(cleanedContent);
+        
+        console.log(`[DEBUG] AI vegetarian check result: ${parsed.isVegetarianRestaurant ? 'YES' : 'NO'} (${parsed.confidence} confidence)`);
+        console.log(`[DEBUG] AI reasoning: ${parsed.reasoning}`);
+        
+        return {
+          isVegetarianRestaurant: !!parsed.isVegetarianRestaurant,
+          confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+          reasoning: parsed.reasoning || 'No reasoning provided',
+          evidenceFor: Array.isArray(parsed.evidenceForVegetarian) ? parsed.evidenceForVegetarian : [],
+          evidenceAgainst: Array.isArray(parsed.evidenceAgainstVegetarian) ? parsed.evidenceAgainstVegetarian : []
+        };
+      } catch (parseError) {
+        console.error('[DEBUG] Failed to parse AI vegetarian check response:', parseError.message);
+        return { isVegetarianRestaurant: false, confidence: 0.0, reasoning: 'Parse error' };
+      }
+    } else {
+      console.warn('[DEBUG] AI vegetarian check failed:', result?.error || 'Unknown error');
+      return { isVegetarianRestaurant: false, confidence: 0.0, reasoning: 'AI check failed' };
+    }
+  } catch (error) {
+    console.error('[DEBUG] Error in AI vegetarian check:', error.message);
+    return { isVegetarianRestaurant: false, confidence: 0.0, reasoning: 'Error occurred' };
+  }
+};
+
+/**
+ * Check if a restaurant is likely to be fully vegetarian based on name and menu patterns
+/**
+ * Optimized analysis for fully vegetarian restaurants
+ * @param {Array} menuItems - Array of menu items
+ * @param {string} restaurantName - Name of the restaurant
+ * @param {string} apiKey - Gemini API key
+ * @returns {Promise<Object>} Analysis results
+ */
+const analyzeFullyVegetarianRestaurant = async (menuItems, restaurantName, apiKey) => {
+  try {
+    console.log(`[DEBUG] Analyzing fully vegetarian restaurant "${restaurantName}" with ${menuItems.length} items`);
+    
+    // For fully vegetarian restaurants, we don't need to filter items - just categorize them
+    const prompt = createVegetarianRestaurantPrompt(menuItems, restaurantName);
+    console.log(`[DEBUG] Vegetarian restaurant prompt length: ${prompt.length} characters`);
+    
+    let result = null;
+    let retryCount = 0;
+    const maxRetries = 2;
+    
+    while (retryCount <= maxRetries && !result?.success) {
+      if (retryCount > 0) {
+        console.log(`[Gemini] Vegetarian restaurant analysis retry ${retryCount}...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      result = await callGeminiAPI(prompt, apiKey);
+      retryCount++;
+    }
+    
+    if (result?.success) {
+      console.log(`[Gemini] Vegetarian restaurant analysis successful`);
+      const analysis = parseVegetarianRestaurantAnalysis(result.content, menuItems);
+      
+      // Mark all items as vegetarian since this is a vegetarian restaurant
+      analysis.vegetarianItems = menuItems.map(item => ({
+        name: item.name || 'Unknown Item',
+        description: item.description || '',
+        price: item.price || '',
+        category: categorizeMenuItem(item.name || '', item.description || ''),
+        confidence: 0.95, // High confidence since it's a vegetarian restaurant
+        notes: 'From fully vegetarian restaurant',
+        isVegan: false, // We'd need separate analysis for vegan
+        explicitlyMarked: false
+      }));
+      
+      analysis.totalItems = menuItems.length;
+      analysis.restaurantVegFriendliness = 'excellent';
+      analysis.confidence = 0.95;
+      analysis.summary = `This is a fully vegetarian restaurant with ${menuItems.length} vegetarian options available.`;
+      
+      return analysis;
+    } else {
+      console.warn(`[Gemini] Vegetarian restaurant analysis failed, falling back to standard analysis`);
+      // Fall back to treating it as a regular restaurant
+      return null;
+    }
+  } catch (error) {
+    console.error('[Gemini] Error in analyzeFullyVegetarianRestaurant:', error.message);
+    return null;
+  }
+};
+
+/**
+ * Create a simplified prompt for fully vegetarian restaurants
+ * @param {Array} menuItems - Array of menu items
+ * @param {string} restaurantName - Name of the restaurant
+ * @returns {string} Formatted prompt
+ */
+const createVegetarianRestaurantPrompt = (menuItems, restaurantName) => {
+  // Just take a sample of items to categorize, not all - limit to 5 items
+  const sampleItems = menuItems.slice(0, 5).map((item, index) => {
+    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
+    return `${index + 1}. ${cleanName}`;
+  }).join('\n');
+
+  return `This is "${restaurantName}", a fully vegetarian restaurant. Please categorize these menu items:
+
+MENU ITEMS (sample):
+${sampleItems}
+
+Since this is a vegetarian restaurant, all items are vegetarian. Please just categorize them properly:
+
+{
+  "categories": {
+    "appetizers": ["item names"],
+    "mains": ["item names"], 
+    "sides": ["item names"],
+    "desserts": ["item names"],
+    "beverages": ["item names"]
+  },
+  "restaurantVegFriendliness": "excellent",
+  "confidence": 0.95,
+  "isVeganFriendly": true/false,
+  "recommendations": ["Quick recommendations for vegetarians"]
+}
+
+Response in JSON only.`;
+};
+
+/**
+ * Parse vegetarian restaurant analysis response
+ * @param {string} content - Raw response from Gemini API
+ * @param {Array} menuItems - Original menu items
+ * @returns {Object} Parsed analysis results
+ */
+const parseVegetarianRestaurantAnalysis = (content, menuItems) => {
+  try {
+    let cleanedContent = content.replace(/```json\s*|\s*```/g, '').trim();
+    
+    const jsonStart = cleanedContent.indexOf('{');
+    const jsonEnd = cleanedContent.lastIndexOf('}') + 1;
+    
+    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+      cleanedContent = cleanedContent.substring(jsonStart, jsonEnd);
+    }
+    
+    const parsed = JSON.parse(cleanedContent);
+    
+    return {
+      vegetarianItems: [], // Will be filled by calling function
+      summary: '',
+      restaurantVegFriendliness: parsed.restaurantVegFriendliness || 'excellent',
+      totalItems: menuItems.length,
+      confidence: parsed.confidence || 0.95,
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [
+        'This is a fully vegetarian restaurant - all menu items are vegetarian-friendly!'
+      ]
+    };
+  } catch (error) {
+    console.error('[Gemini] Error parsing vegetarian restaurant analysis:', error.message);
+    return {
+      vegetarianItems: [],
+      summary: '',
+      restaurantVegFriendliness: 'excellent',
+      totalItems: menuItems.length,
+      confidence: 0.95,
+      recommendations: ['Fully vegetarian restaurant with many options available.']
+    };
+  }
+};
+
+/**
+ * Simple helper to categorize menu items based on name/description
+ * @param {string} name - Item name
+ * @param {string} description - Item description
+ * @returns {string} Category
+ */
+const categorizeMenuItem = (name, description) => {
+  const text = `${name} ${description}`.toLowerCase();
+  
+  if (text.includes('appetizer') || text.includes('starter') || text.includes('app') || 
+      text.includes('dip') || text.includes('wings') || text.includes('bite')) {
+    return 'appetizer';
+  }
+  
+  if (text.includes('dessert') || text.includes('cake') || text.includes('ice cream') || 
+      text.includes('pie') || text.includes('cookie') || text.includes('sweet')) {
+    return 'dessert';
+  }
+  
+  if (text.includes('drink') || text.includes('juice') || text.includes('coffee') || 
+      text.includes('tea') || text.includes('soda') || text.includes('beverage')) {
+    return 'beverage';
+  }
+  
+  if (text.includes('side') || text.includes('fries') || text.includes('rice') || 
+      text.includes('bread') || text.includes('chips')) {
+    return 'side';
+  }
+  
+  return 'main'; // Default to main course
 };
 
 /**
@@ -524,11 +841,19 @@ const callGeminiAPI = async (prompt, apiKey) => {
  */
 const createScrapedMenuAnalysisPrompt = (menuItems, restaurantName) => {
   const itemsText = menuItems.map((item, index) => {
-    // Shorten description to 100 characters max
+    // Shorten description to 80 characters max for more conservative approach
     let desc = (item.description || 'No description').trim();
-    if (desc.length > 100) desc = desc.slice(0, 100) + '...';
-    return `${index + 1}. ${item.name}: ${desc}`;
+    if (desc.length > 80) desc = desc.slice(0, 80) + '...';
+    
+    // Clean the item name and description to avoid issues
+    const cleanName = (item.name || 'Unknown Item').replace(/[^\w\s\-.,()]/g, ' ').trim();
+    const cleanDesc = desc.replace(/[^\w\s\-.,()]/g, ' ').trim();
+    
+    return `${index + 1}. ${cleanName}: ${cleanDesc}`;
   }).join('\n');
+
+  // Log some debug info about prompt size
+  console.log(`[DEBUG] Creating analysis prompt for ${menuItems.length} items, estimated size: ${itemsText.length + 2000} characters`);
 
   return `You are a multilingual vegetarian dining expert analyzing a restaurant menu. The menu items may be in any language (English, Spanish, French, Italian, German, Portuguese, Japanese, Chinese, etc.). Please analyze the following menu items from "${restaurantName}" and identify vegetarian-friendly options.
 
