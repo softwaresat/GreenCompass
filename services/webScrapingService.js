@@ -6,11 +6,12 @@
 import axios from 'axios';
 
 /**
- * Scrape restaurant menu from website using pure backend approach
+ * Scrape restaurant menu from website using pure backend approach with intelligent parallelization
  * @param {string} websiteUrl - URL of the restaurant website
+ * @param {Object} options - Scraping options
  * @returns {Promise<Object>} Scraped menu data
  */
-export const scrapeRestaurantMenu = async (websiteUrl) => {
+export const scrapeRestaurantMenu = async (websiteUrl, options = {}) => {
   try {
     const startTime = Date.now();
     const normalizedUrl = normalizeUrl(websiteUrl);
@@ -23,7 +24,12 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
     // Fix the URL format - ensure it has http:// protocol
     const backendUrl = serverUrl.startsWith('http') ? serverUrl : `http://${serverUrl}`;
     
-    console.log(`[Pure Backend] Sending request to: ${backendUrl}/api/scrape-menu-complete`);
+    // Determine best endpoint based on site complexity and worker availability
+    const useParallelProcessing = options.forceParallel !== false; // Default to parallel
+    const endpoint = useParallelProcessing ? '/api/scrape-menu-parallel' : '/api/scrape-menu-complete';
+    
+    console.log(`[Pure Backend] Using ${useParallelProcessing ? 'PARALLEL' : 'STANDARD'} processing`);
+    console.log(`[Pure Backend] Sending request to: ${backendUrl}${endpoint}`);
     console.log(`[Pure Backend] Request payload:`, {
       url: normalizedUrl,
       options: {
@@ -33,19 +39,52 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       }
     });
     
-    const response = await axios.post(`${backendUrl}/api/scrape-menu-complete`, {
+    const requestOptions = {
       url: normalizedUrl,
       options: {
         mobile: true,
         timeout: 120000 // Allow more time for AI processing
         // Don't send waitForSelector: null, just omit it
       }
-    }, {
-      timeout: 150000, // 150 seconds total timeout for AI processing - longer than backend
-      headers: {
-        'Content-Type': 'application/json'
+    };
+
+    // First try parallel processing for better submenu handling
+    let response;
+    let usedParallel = false;
+    
+    if (useParallelProcessing) {
+      try {
+        console.log(`[Pure Backend] Attempting parallel submenu processing with 4 workers...`);
+        response = await axios.post(`${backendUrl}/api/scrape-menu-parallel`, requestOptions, {
+          timeout: 150000, // 150 seconds total timeout for parallel AI processing
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        usedParallel = true;
+        console.log(`[Pure Backend] ✅ Parallel processing successful`);
+      } catch (parallelError) {
+        console.log(`[Pure Backend] ⚠️ Parallel processing failed, falling back to standard: ${parallelError.response?.data?.error || parallelError.message}`);
+        
+        // Fallback to standard endpoint
+        response = await axios.post(`${backendUrl}/api/scrape-menu-complete`, requestOptions, {
+          timeout: 150000, // 150 seconds total timeout for AI processing - longer than backend
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        usedParallel = false;
       }
-    });
+    } else {
+      // Use standard endpoint directly
+      response = await axios.post(`${backendUrl}/api/scrape-menu-complete`, requestOptions, {
+        timeout: 150000, // 150 seconds total timeout for AI processing - longer than backend
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      usedParallel = false;
+    }
 
     if (response.data && response.data.success) {
       const menuData = response.data;
@@ -54,18 +93,30 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       console.log(`[Pure Backend] Discovery method: ${menuData.discoveryMethod || 'unknown'}`);
       console.log(`[Pure Backend] Processing time: ${menuData.extractionTime || menuData.discoveryTime || 0}ms`);
       
+      if (usedParallel && menuData.parallelProcessing) {
+        console.log(`[Pure Backend] 🏭 Parallel processing stats:`);
+        console.log(`   Workers used: ${menuData.parallelProcessing.workersUsed || 0}`);
+        console.log(`   Sub-menus processed: ${menuData.parallelProcessing.subMenusProcessed || 0}`);
+        console.log(`   Successful sub-menus: ${menuData.parallelProcessing.successfulSubMenus || 0}`);
+        console.log(`   Total pages scraped: ${menuData.totalPagesScraped || 1}`);
+      }
+      
       return {
         success: true,
         menuItems: menuData.menuItems || [],
         categories: menuData.categories || [],
         restaurantInfo: menuData.restaurantInfo || {},
-        method: 'pure-backend-ai',
+        method: usedParallel ? 'pure-backend-ai-parallel' : 'pure-backend-ai',
         scrapingTime: Date.now() - startTime,
         extractionTime: menuData.extractionTime || menuData.discoveryTime || 0,
         discoveryTime: menuData.discoveryTime || menuData.extractionTime || 0,
         discoveryMethod: menuData.discoveryMethod || 'unknown',
         menuPageUrl: menuData.menuPageUrl,
-        url: normalizedUrl
+        url: normalizedUrl,
+        parallelProcessing: menuData.parallelProcessing || null,
+        totalPagesScraped: menuData.totalPagesScraped || 1,
+        subMenuUrls: menuData.subMenuUrls || [],
+        isComprehensive: menuData.isComprehensive || false
       };
     } else {
       const errorMessage = response.data?.error || 'Backend scraping failed';
@@ -76,7 +127,7 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
         success: false,
         error: errorMessage,
         menuItems: [],
-        method: 'pure-backend-ai-failed',
+        method: usedParallel ? 'pure-backend-ai-parallel-failed' : 'pure-backend-ai-failed',
         scrapingTime: Date.now() - startTime,
         extractionTime: responseTime,
         discoveryTime: responseTime,
@@ -124,6 +175,13 @@ export const scrapeRestaurantMenu = async (websiteUrl) => {
       suggestions = [
         'Wait 60 seconds before making another request',
         'The rate limit helps ensure reliable service for all users'
+      ];
+    } else if (error.response?.status === 503) {
+      userFriendlyError = 'Parallel processing unavailable, but standard processing should work.';
+      suggestions = [
+        'Worker pool may be temporarily unavailable',
+        'Try again as this usually resolves quickly',
+        'Standard single-threaded processing is still available'
       ];
     } else if (error.response?.status >= 500) {
       userFriendlyError = 'Server error occurred during menu scraping.';

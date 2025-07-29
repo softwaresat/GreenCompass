@@ -17,7 +17,8 @@ const { validateUrl, normalizeUrl, validateOptions } = require('./utils/validati
 
 // Multi-threading configuration
 const ENABLE_CLUSTERING = process.env.ENABLE_CLUSTERING !== 'false';
-const MAX_WORKERS = Math.min(numCPUs, 4); // Limit to 4 workers max for scraping
+const MAX_WORKERS = Math.min(numCPUs, parseInt(process.env.MAX_WORKERS) || 4); // Configurable worker count
+const ENABLE_PARALLEL_SUBMENUS = process.env.ENABLE_PARALLEL_SUBMENUS !== 'false'; // Enable submenu parallelization by default
 
 // Worker thread pool for CPU-intensive scraping tasks
 class ScrapingWorkerPool {
@@ -288,9 +289,60 @@ app.get('/health', (req, res) => {
       workers: scrapingPool?.workers?.length || 0,
       activeJobs: scrapingPool?.activeJobs?.size || 0
     },
+    parallelization: {
+      clusteringEnabled: ENABLE_CLUSTERING,
+      maxWorkers: MAX_WORKERS,
+      submenuParallelizationEnabled: ENABLE_PARALLEL_SUBMENUS,
+      workerPoolAvailable: !!scrapingPool && scrapingPool.workers.length > 0
+    },
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     cpus: numCPUs
+  });
+});
+
+// Configuration endpoint for parallelization settings
+app.get('/api/config', (req, res) => {
+  res.json({
+    server: 'GreenCompass Backend',
+    version: '2.0.0',
+    parallelization: {
+      clustering: {
+        enabled: ENABLE_CLUSTERING,
+        workers: Object.keys(cluster.workers || {}).length,
+        cpus: numCPUs
+      },
+      workerPool: {
+        enabled: !!scrapingPool,
+        maxWorkers: MAX_WORKERS,
+        activeWorkers: scrapingPool?.workers?.length || 0,
+        activeJobs: scrapingPool?.activeJobs?.size || 0,
+        submenuParallelization: ENABLE_PARALLEL_SUBMENUS
+      },
+      endpoints: {
+        '/api/scrape-menu-complete': {
+          description: 'Standard menu scraping with worker pool',
+          parallelization: 'Single worker per request',
+          bestFor: 'Simple sites, known menu pages'
+        },
+        '/api/scrape-menu-parallel': {
+          description: 'Parallel submenu scraping across 4 workers',
+          parallelization: `${MAX_WORKERS} workers for submenu distribution`,
+          enabled: ENABLE_PARALLEL_SUBMENUS,
+          bestFor: 'Complex sites with multiple menu sections'
+        }
+      }
+    },
+    environment: {
+      ENABLE_CLUSTERING: process.env.ENABLE_CLUSTERING || 'true',
+      MAX_WORKERS: process.env.MAX_WORKERS || '4',
+      ENABLE_PARALLEL_SUBMENUS: process.env.ENABLE_PARALLEL_SUBMENUS || 'true'
+    },
+    performance: {
+      rateLimit: '50 requests/minute',
+      timeout: '2 minutes default',
+      maxConcurrent: 10
+    }
   });
 });
 
@@ -354,6 +406,16 @@ app.post('/api/scrape-menu-parallel', urlValidationMiddleware, async (req, res) 
   
   try {
     console.log(`🚀 Parallel menu scraping request received for: ${url}`);
+    
+    // Check if parallel submenus are enabled
+    if (!ENABLE_PARALLEL_SUBMENUS) {
+      return res.status(503).json({
+        success: false,
+        error: 'Parallel submenu processing is disabled - use /api/scrape-menu-complete instead',
+        fallbackEndpoint: '/api/scrape-menu-complete',
+        url: url
+      });
+    }
     
     // Validate options
     const optionsValidation = validateOptions(options);
@@ -612,6 +674,7 @@ const startServer = async () => {
     console.log(`📍 Local: http://localhost:${PORT}`);
     console.log(`🌐 Network: http://${vmIP}:${PORT}`);
     console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
+    console.log(`⚙️ Config: http://${vmIP}:${PORT}/api/config`);
     console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
     console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
     console.log(`� Parallel API: POST http://${vmIP}:${PORT}/api/scrape-menu-parallel`);

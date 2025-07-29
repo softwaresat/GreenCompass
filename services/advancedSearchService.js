@@ -216,9 +216,9 @@ const performDetailedVegAnalysis = async (restaurant) => {
       };
     }
 
-    // Step 2: Scrape menu with timeout
+    // Step 2: Scrape menu with timeout and parallel processing
     const menuData = await Promise.race([
-      scrapeRestaurantMenu(details.website),
+      scrapeRestaurantMenu(details.website, { forceParallel: true }), // Enable parallel processing
       new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Menu scraping timeout')), 60000)
       )
@@ -569,8 +569,8 @@ const quickVegAnalysis = async (restaurant) => {
       };
     }
 
-    // Quick menu scraping
-    const menuData = await scrapeRestaurantMenu(details.website);
+    // Quick menu scraping with parallel processing
+    const menuData = await scrapeRestaurantMenu(details.website, { forceParallel: true });
     
     if (!menuData.success || menuData.menuItems.length === 0) {
       return {
