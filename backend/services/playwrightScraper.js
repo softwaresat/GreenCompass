@@ -1574,128 +1574,31 @@ Return ONLY JSON:
       const enhancedHtml = this.prepareEnhancedHtmlForGemini(htmlContent);
       const textContent = this.htmlToText(htmlContent);
       
-      const prompt = `Analyze this restaurant website to find SPECIFIC menu page URLs. Focus on finding direct links to pages that contain actual food menus.
+      const prompt = `Find menu links on this restaurant website.
 
 Website URL: ${url}
 
-HTML Structure:
+HTML Content:
 ${enhancedHtml}
 
-Text Content Sample:
-${textContent.substring(0, 5000)}
+Find any links, buttons, or clickable elements that lead to the restaurant's menu. Look for:
+- Text containing "menu", "food", "order"
+- PDF menu links  
+- Navigation links to menu pages
 
-FIND MENU LINKS - Look for these EXACT indicators:
-
-1. OBVIOUS MENU BUTTONS/LINKS:
-   *** HIGHEST PRIORITY: Look for <a>, <button>, or clickable elements with text containing:
-   - "Menu" (exact word)
-   - "Our Menu", "Food Menu", "See Menu", "View Menu"
-   - "Order" combined with "Menu" or "Food"
-   - Any button/link that literally says "MENU"
-
-2. NAVIGATION MENU LINKS:
-   - Check href attributes for: /menu, /food, /dining, /our-menu, /eat
-   - Navigation bars, headers, main menus with menu-related text
-
-3. PROMINENT ACTION BUTTONS:
-   - "Order Now" that leads to menu pages
-   - "Browse Menu", "See Our Menu" buttons
-   - Call-to-action buttons with food/menu context
-
-4. EXTRACT ACTUAL URLs:
-   - Look for actual href attributes in the HTML
-   - Convert relative URLs to full URLs using base: ${url}
-   - Examples: "/menu" becomes "${url}/menu"
-   - PDF MENUS: If you find PDF links (ending in .pdf), include them with HIGH priority - many restaurants use PDFs for menus
-   - Look for menu PDFs like "menu.pdf", "food-menu.pdf", "dinner-menu.pdf" etc.
-
-5. BUTTON/LINK ANALYSIS:
-   - Pay special attention to <button> tags with "menu" text
-   - CRITICAL: Look for <div> and <span> elements with "menu" text that might be clickable
-   - Look at onclick handlers that might navigate to menu pages
-   - Check data-* attributes that might contain menu URLs
-   - Look for JavaScript navigation patterns like: window.location, href assignments
-   - Check for React Router links or Vue Router links
-   - Check for CSS classes that indicate clickability (btn, button, clickable, pointer, etc.)
-   - PDF LINKS: Look for "Download Menu", "View Menu PDF", "Menu PDF" links
-
-6. CLICKABLE DIV DETECTION:
-   - Look for <div> elements containing "Menu" text even if they don't have href attributes
-   - Check for data-href, data-url, data-link, or similar data attributes
-   - Look for parent elements that might contain the actual navigation logic
-   - Check for CSS classes like "menu-item", "nav-item", "clickable", etc.
-   - If you find "MENU" in a div, report it even if you can't find the URL
-
-6. SPECIAL CASES - ALWAYS INCLUDE THESE:
-   - If you see "View Menu" text anywhere, find the associated link/action
-   - Check for menu links in navigation bars, headers, footers
-   - Look for menu buttons in hero sections or main content areas
-   - Search for any clickable element with menu-related text
-   - PDF menu downloads or views
-
-IGNORE:
-- External ordering platforms (unless they're the ONLY menu option)  
-- Social media links
-- Contact/location pages
-- General "About" pages
-
-!!! CRITICAL: If you see ANY element (button, link, div) with the word "menu" in the visible text, that should be your TOP priority suggestion!
-
-DEBUGGING - If you find "View Menu" or similar text but can't find a URL:
-- Look more carefully at the surrounding HTML structure
-- Check for data-href, data-url, or similar attributes
-- Look for JavaScript patterns that might construct URLs
-- Consider that the URL might be built dynamically
-
-PDF HANDLING:
-- If you find PDF menu links, include them with high priority - PDFs are common for restaurant menus
-- Mark PDF links as type: "pdf" with confidence 80-90 (increased from previous 60-70)
-- Look for: "View Menu PDF", "Download Menu", "Menu.pdf", "Dinner Menu.pdf" etc.
-- PDF menus are often more complete than web menus
-
-Return ONLY a JSON object with this structure:
+Return a JSON object:
 {
-  "hasHiddenMenu": false,
   "menuUrls": [
     {
-      "url": "EXACT full URL found in HTML (e.g., ${url}/menu)",
-      "confidence": 95,
-      "reason": "Found button with text 'Menu' linking to /menu",
-      "type": "direct|pdf|orderingsystem"
+      "url": "full URL",
+      "confidence": 90,
+      "reason": "Found menu button",
+      "type": "direct"
     }
-  ],
-  "contextClues": {
-    "restaurantType": "identified type based on content",
-    "menuKeywords": ["actual keywords found"],
-    "hasOrderingSystem": false,
-    "hasThirdPartyMenu": false,
-    "hasPdfMenu": false
-  },
-  "debugInfo": {
-    "foundMenuText": ["list of menu-related text found"],
-    "foundButtons": ["list of button texts that contain menu"],
-    "foundLinks": ["list of link texts that contain menu"],
-    "foundClickableDivs": ["list of clickable div elements with menu text"],
-    "foundDataAttributes": ["list of data-* attributes that might contain URLs"]
-  }
-}
-
-PRIORITY ORDER:
-1. HTML pages with visible "Menu" buttons/links (confidence: 90-99, type: "direct")
-2. PDF menu documents (confidence: 80-90, type: "pdf")
-3. "Order" or "Food" HTML buttons (confidence: 70-85, type: "direct") 
-4. Navigation menu HTML items (confidence: 60-75, type: "direct")
-5. Other potential links (confidence: 30-50, type: "direct")
-
-Return maximum 5 URLs, highest confidence first!`;
+  ]
+}`;
 
       console.log(`[Enhanced AI Search] Analyzing page structure for: ${url}`);
-      
-      // Debug: Log what HTML we're actually getting
-      console.log(`[Enhanced AI Search Debug] Enhanced HTML length: ${enhancedHtml.length} chars`);
-      console.log(`[Enhanced AI Search Debug] Text content length: ${textContent.length} chars`);
-      console.log(`[Enhanced AI Search Debug] Enhanced HTML sample (first 3000 chars):`);
-      console.log(enhancedHtml.substring(0, 3000));
       
       const result = await callGeminiAPI(prompt, apiKey, 'enhanced menu search');
       
@@ -1713,15 +1616,6 @@ Return maximum 5 URLs, highest confidence first!`;
       
       try {
         const parsedResult = JSON.parse(jsonMatch[0]);
-        
-        // Debug output
-        if (parsedResult.debugInfo) {
-          console.log(`[Enhanced AI Search Debug] Found menu text: ${JSON.stringify(parsedResult.debugInfo.foundMenuText)}`);
-          console.log(`[Enhanced AI Search Debug] Found buttons: ${JSON.stringify(parsedResult.debugInfo.foundButtons)}`);
-          console.log(`[Enhanced AI Search Debug] Found links: ${JSON.stringify(parsedResult.debugInfo.foundLinks)}`);
-          console.log(`[Enhanced AI Search Debug] Found clickable divs: ${JSON.stringify(parsedResult.debugInfo.foundClickableDivs)}`);
-          console.log(`[Enhanced AI Search Debug] Found data attributes: ${JSON.stringify(parsedResult.debugInfo.foundDataAttributes)}`);
-        }
         
         // Validate and normalize URLs
         if (parsedResult.menuUrls) {
@@ -1870,73 +1764,39 @@ Return ONLY a JSON object:
     cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
     cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
     
-    // For debugging, let's be less restrictive and include more content
-    // Instead of extracting specific patterns, let's include larger chunks of the page
+    const importantElements = [];
     
-    // Get navigation and header sections (more broadly)
-    const navSections = [];
-    const navPatterns = [
-      /<nav[^>]*>[\s\S]*?<\/nav>/gi,
-      /<header[^>]*>[\s\S]*?<\/header>/gi,
-      /<div[^>]*(?:class|id)[^>]*(?:nav|menu|header|main-nav|primary-nav|navigation|topbar|menubar)[^>]*>[\s\S]*?<\/div>/gi,
-    ];
+    // Get ALL links first - simplified
+    const linkPattern = /<a[^>]*>[\s\S]*?<\/a>/gi;
+    const allLinks = cleaned.match(linkPattern) || [];
+    importantElements.push(...allLinks);
     
-    navPatterns.forEach(pattern => {
-      const matches = cleaned.match(pattern) || [];
-      navSections.push(...matches);
-    });
+    // Get ALL buttons - simplified
+    const buttonPattern = /<button[^>]*>[\s\S]*?<\/button>/gi;
+    const allButtons = cleaned.match(buttonPattern) || [];
+    importantElements.push(...allButtons);
     
-    // Get main content areas
-    const contentSections = [];
-    const contentPatterns = [
-      /<main[^>]*>[\s\S]*?<\/main>/gi,
-      /<div[^>]*(?:class|id)[^>]*(?:content|main|hero|featured|banner|intro|home)[^>]*>[\s\S]*?<\/div>/gi,
-    ];
+    // Get clickable divs that contain "menu" text - very simple approach
+    const menuDivPattern = /<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi;
+    const menuDivs = cleaned.match(menuDivPattern) || [];
+    importantElements.push(...menuDivs);
     
-    contentPatterns.forEach(pattern => {
-      const matches = cleaned.match(pattern) || [];
-      contentSections.push(...matches);
-    });
+    // Get navigation sections
+    const navPattern = /<nav[^>]*>[\s\S]*?<\/nav>/gi;
+    const navSections = cleaned.match(navPattern) || [];
+    importantElements.push(...navSections);
     
-    // Get ALL divs that might contain "menu" text (be very broad)
-    const menuDivs = cleaned.match(/<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi) || [];
+    // Get header sections  
+    const headerPattern = /<header[^>]*>[\s\S]*?<\/header>/gi;
+    const headerSections = cleaned.match(headerPattern) || [];
+    importantElements.push(...headerSections);
     
-    // Get ALL links and buttons (be very broad)
-    const allInteractive = [];
-    const interactivePatterns = [
-      /<a[^>]*>[\s\S]*?<\/a>/gi,
-      /<button[^>]*>[\s\S]*?<\/button>/gi,
-      /<div[^>]*(?:onclick|data-|class)[^>]*>[\s\S]*?<\/div>/gi,
-    ];
+    // Remove duplicates and combine
+    const uniqueElements = [...new Set(importantElements)];
+    let result = uniqueElements.join('\n\n').substring(0, 25000);
     
-    interactivePatterns.forEach(pattern => {
-      const matches = cleaned.match(pattern) || [];
-      allInteractive.push(...matches);
-    });
-    
-    // Combine all sections
-    const allSections = [
-      ...navSections,
-      ...contentSections, 
-      ...menuDivs,
-      ...allInteractive
-    ];
-    
-    // Remove duplicates and create result
-    const uniqueSections = [...new Set(allSections)];
-    let result = uniqueSections.join('\n\n').substring(0, 30000);
-    
-    if (result.length >= 30000) {
+    if (result.length >= 25000) {
       result += '\n...[Content truncated for AI analysis]';
-    }
-    
-    // If we got very little content, fall back to a larger chunk of raw HTML
-    if (result.length < 1000) {
-      console.log(`[Enhanced AI Search Debug] Got very little enhanced HTML (${result.length} chars), using raw HTML chunk`);
-      result = cleaned.substring(0, 20000);
-      if (cleaned.length > 20000) {
-        result += '\n...[Raw HTML truncated]';
-      }
     }
     
     return result;
