@@ -158,130 +158,17 @@ Return JSON: {"vegetarianItems":[{"name":"item name","category":"main"}],"restau
       }
     }
     
-    // Now, try to enhance only the vegetarian items (non-blocking for overall function)
-    let enhancedItems = [...menuItems]; // Default to original items
-    try {
-      // Only enhance vegetarian items identified by the analysis
-      const vegetarianItemsToEnhance = vegetarianAnalysis.vegetarianItems || [];
-      
-      if (vegetarianItemsToEnhance.length === 0) {
-        console.log(`[WebScraping] No vegetarian items found to enhance`);
-        return {
-          ...vegetarianAnalysis,
-          enhancedMenuItems: menuItems
-        };
-      }
-      
-      console.log(`[WebScraping] Enhancing ${vegetarianItemsToEnhance.length} vegetarian items with AI...`);
-      
-      // Use batching for enhancement to avoid token limits
-      const batchSize = 25; // Reduced batch size to prevent timeouts
-      const batches = splitIntoBatches(vegetarianItemsToEnhance, batchSize);
-      console.log(`[DEBUG] Split ${vegetarianItemsToEnhance.length} vegetarian items into ${batches.length} batches of up to ${batchSize} items each`);
-      
-      // Map of original vegetarian items by name for quick lookup
-      const vegetarianItemMap = new Map();
-      vegetarianItemsToEnhance.forEach(item => {
-        vegetarianItemMap.set(item.name.toLowerCase(), item);
-      });
-      
-      // Process each batch separately
-      const enhancedVegetarianItems = [];
-      let successfulBatches = 0;
-      
-      for (let i = 0; i < batches.length; i++) {
-        const currentBatch = batches[i];
-        console.log(`[DEBUG] Processing batch ${i+1}/${batches.length} with ${currentBatch.length} vegetarian items`);
-        
-        // Create a prompt for this batch (no restaurant name for each batch)
-        const batchPrompt = createMenuEnhancementPrompt(currentBatch);
-        console.log(`[DEBUG] Batch ${i+1} prompt length: ${batchPrompt.length} characters`);
-        
-        // Try to enhance this batch with a single retry
-        let batchResult = null;
-        let retryCount = 0;
-        const maxRetries = 1; // Just one retry per batch
-        
-        while (retryCount <= maxRetries && !batchResult?.success) {
-          if (retryCount > 0) {
-            console.log(`[Gemini] Retry for batch ${i+1}...`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-          
-          batchResult = await callGeminiAPI(batchPrompt, apiKey);
-          retryCount++;
-        }
-        
-        if (batchResult?.success) {
-          console.info(`[Gemini] Batch ${i+1} enhancement successful using ${batchResult.model || 'API'}`);
-          const enhancedBatchItems = parseEnhancedMenuItems(batchResult.content, currentBatch);
-          enhancedVegetarianItems.push(...enhancedBatchItems);
-          successfulBatches++;
-        } else {
-          console.warn(`[Gemini] Batch ${i+1} enhancement failed:`, batchResult?.error || 'Unknown error');
-          // If a batch fails, use the original items for that batch
-          enhancedVegetarianItems.push(...currentBatch);
-        }
-        
-        // Small delay between batches to avoid rate limiting
-        if (i < batches.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      }
-      
-      console.log(`[DEBUG] Enhancement complete. ${successfulBatches}/${batches.length} batches processed successfully`);
-      
-      if (successfulBatches > 0) {
-        // Create a copy of all menu items, we'll only update the vegetarian ones
-        const resultItems = [...menuItems];
-        
-        // Log comprehensive restaurant analysis once at the end
-        console.log(`[WebScraping] Completed analysis for "${restaurantName}" - Found ${vegetarianAnalysis.vegetarianItems.length} vegetarian items with ${vegetarianAnalysis.restaurantVegFriendliness} friendliness rating`);
-        
-        // Apply enhancements only to vegetarian items
-        enhancedVegetarianItems.forEach(enhancedItem => {
-          // Skip items that don't have a name or originalName
-          if (!enhancedItem.name && !enhancedItem.originalName) return;
-          
-          // Match by original name first (more reliable)
-          const matchKey = enhancedItem.originalName || enhancedItem.name;
-          
-          // Find the matching original item
-          const matchIndex = resultItems.findIndex(item => 
-            item.name.toLowerCase() === matchKey.toLowerCase()
-          );
-          
-          if (matchIndex !== -1) {
-            // Update the item with enhanced info
-            if (enhancedItem.name && enhancedItem.name !== enhancedItem.originalName) {
-              resultItems[matchIndex].name = enhancedItem.name;
-            }
-            
-            if (enhancedItem.category) {
-              resultItems[matchIndex].category = enhancedItem.category;
-            }
-          }
-        });
-        
-        enhancedItems = resultItems;
-        
-      } else {
-        console.warn('[Gemini] All enhancement batches failed. Using original items.');
-      }
-    } catch (enhancementError) {
-      console.error('[Gemini] Error in menu enhancement:', enhancementError.message);
-      // If enhancement fails, we still continue with original items
-    }
+    // Return the vegetarian analysis directly without enhancement
+    // Enhancement adds complexity without significant value for users
+    console.log(`[WebScraping] Analysis complete for "${restaurantName}": Found ${vegetarianAnalysis.vegetarianItems.length} vegetarian items`);
     
-    // Generate a concise restaurant summary with all collected data
+    // Generate a concise restaurant summary
     const finalSummary = `${restaurantName}: ${vegetarianAnalysis.summary} Vegetarian-friendliness: ${vegetarianAnalysis.restaurantVegFriendliness.toUpperCase()}.`;
-    console.log(`[WebScraping] Analysis complete for "${restaurantName}": ${finalSummary}`);
     
-    // Return both the vegetarian analysis and enhanced items
     return {
       ...vegetarianAnalysis,
       summary: finalSummary,
-      enhancedMenuItems: enhancedItems
+      enhancedMenuItems: menuItems // Just return original items
     };
   } catch (error) {
     throw error;
@@ -872,12 +759,14 @@ STRICT ANALYSIS REQUIREMENTS:
 1. MULTILINGUAL SUPPORT: Work with menu items in their original language - translate and understand items in any language
 2. Identify ONLY items that are 100% vegetarian (contain NO meat, poultry, fish, seafood, or animal broths)
 3. EXCLUDE ANY ITEM with meat/fish/poultry in the name or description, even if it might seem "mostly vegetarian"
-4. Include items that can be easily modified to be vegetarian ONLY if the base item is vegetarian (mention modification needed)
-5. Look for explicit vegetarian markings in any language (V, VEG, vegetarian symbols, "vegetariano", "végétarien", "vegetarisch", etc.)
-6. Consider side dishes, appetizers, salads, desserts, and beverages that are vegetarian
-7. For dessert places: analyze pastries, cakes, ice cream, coffee drinks, etc. for vegetarian ingredients
-8. When in doubt about an item containing animal products, EXCLUDE it rather than include it
-9. Provide item names in their original language but add English translations in parentheses if needed
+4. EXCLUDE MENU SECTIONS: Do not include generic menu section headers like "Dinner Menu", "Kids Menu", "Private Events", "Appetizers", "Mains", etc.
+5. ONLY INCLUDE ACTUAL FOOD ITEMS: Include only specific dishes, beverages, or food items that can be ordered
+6. Include items that can be easily modified to be vegetarian ONLY if the base item is vegetarian (mention modification needed)
+7. Look for explicit vegetarian markings in any language (V, VEG, vegetarian symbols, "vegetariano", "végétarien", "vegetarisch", etc.)
+8. Consider side dishes, appetizers, salads, desserts, and beverages that are vegetarian
+9. For dessert places: analyze pastries, cakes, ice cream, coffee drinks, etc. for vegetarian ingredients
+10. When in doubt about an item containing animal products, EXCLUDE it rather than include it
+11. Provide item names in their original language but add English translations in parentheses if needed
 
 EXAMPLES OF WHAT TO EXCLUDE:
 - "Ahi Tuna Bowl" → EXCLUDE (contains tuna)
@@ -885,6 +774,10 @@ EXAMPLES OF WHAT TO EXCLUDE:
 - "Caesar Salad" → EXCLUDE if it contains anchovies or chicken
 - "Beef and Vegetable Stir Fry" → EXCLUDE (contains beef)
 - "Chicken Noodle Soup" → EXCLUDE (contains chicken)
+- "Dinner Menu" → EXCLUDE (menu section, not a food item)
+- "Kids Menu" → EXCLUDE (menu section, not a food item)
+- "Private Events" → EXCLUDE (menu section, not a food item)
+- "Appetizers" → EXCLUDE (menu category, not a specific food item)
 
 RESPONSE FORMAT (JSON):
 {
@@ -1055,10 +948,23 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       'bone broth', 'chicken broth', 'beef broth', 'fish stock'
     ];
     
-    // Filter out items that contain non-vegetarian terms
+    // Define generic menu section terms to filter out (not actual food items)
+    const menuSectionTerms = [
+      // Menu sections
+      'menu', 'dinner menu', 'lunch menu', 'breakfast menu', 'brunch menu', 'kids menu', 'children menu',
+      'appetizers', 'mains', 'entrees', 'desserts', 'beverages', 'drinks', 'sides', 'salads',
+      'private events', 'catering', 'party menu', 'group menu', 'banquet menu',
+      'specials', 'chef specials', 'daily specials', 'seasonal menu',
+      'wine list', 'beer list', 'cocktails', 'bar menu',
+      // Common placeholders
+      'no description provided', 'description not available', 'see menu', 'varies',
+      'ask server', 'market price', 'seasonal'
+    ];
+    
+    // Filter out items that contain non-vegetarian terms OR are generic menu sections
     const filteredVegetarianItems = Array.isArray(parsed.vegetarianItems) 
       ? parsed.vegetarianItems.filter(item => {
-          const itemName = (item.name || '').toLowerCase();
+          const itemName = (item.name || '').toLowerCase().trim();
           const itemDescription = (item.description || '').toLowerCase();
           const combinedText = `${itemName} ${itemDescription}`;
           
@@ -1069,6 +975,22 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
           
           if (containsNonVegTerm) {
             console.warn(`[VEGETARIAN FILTER] Excluded "${item.name}" - contains non-vegetarian ingredients`);
+            return false;
+          }
+          
+          // Check if this is a generic menu section rather than an actual food item
+          const isMenuSection = menuSectionTerms.some(term => 
+            itemName === term.toLowerCase() || itemName.includes(term.toLowerCase())
+          );
+          
+          if (isMenuSection) {
+            console.warn(`[MENU SECTION FILTER] Excluded "${item.name}" - generic menu section, not a food item`);
+            return false;
+          }
+          
+          // Filter out items that are too short (likely not real menu items)
+          if (itemName.length < 3) {
+            console.warn(`[LENGTH FILTER] Excluded "${item.name}" - too short to be a real menu item`);
             return false;
           }
           

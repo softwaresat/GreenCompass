@@ -14,7 +14,7 @@ const { callGeminiAPI } = require('./geminiHelper');
 class PlaywrightScraper {
   constructor() {
     this.browser = null;
-    this.maxConcurrentPages = 10; // Increased for better performance
+    this.maxConcurrentPages = 15; // Increased for multithreaded server
     this.activeScrapes = new Set();
   }
 
@@ -30,11 +30,28 @@ class PlaywrightScraper {
           '--disable-dev-shm-usage',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding'
+          '--disable-renderer-backgrounding',
+          // Performance optimizations
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images', // Skip loading images for faster loading
+          '--disable-web-security',
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-default-apps',
+          '--disable-popup-blocking',
+          '--disable-translate',
+          '--disable-gpu',
+          // Multithreading optimizations
+          '--max-old-space-size=4096',
+          '--disable-background-networking',
+          '--disable-component-extensions-with-background-pages',
+          '--disable-ipc-flooding-protection',
+          '--renderer-process-limit=10'
         ]
       });
       
-      console.log('✅ Playwright browser initialized');
+      console.log('✅ Playwright browser initialized with performance optimizations');
       return this.browser;
     } catch (error) {
       console.error('❌ Failed to initialize browser:', error.message);

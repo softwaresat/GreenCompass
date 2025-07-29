@@ -1,16 +1,128 @@
 /**
  * Express server for GreenCompass menu scraping
- * Optimized for reliable performance with reasonable resource usage
+ * Optimized with multithreading and clustering support for maximum performance
  */
 
+const cluster = require('cluster');
+const numCPUs = require('os').cpus().length;
 const compression = require('compression');
 const cors = require('cors');
 const express = require('express');
 const helmet = require('helmet');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 
 const playwrightScraper = require('./services/playwrightScraper.js');
 const { validateUrl, normalizeUrl, validateOptions } = require('./utils/validation.js');
+
+// Multi-threading configuration
+const ENABLE_CLUSTERING = process.env.ENABLE_CLUSTERING !== 'false';
+const MAX_WORKERS = Math.min(numCPUs, 4); // Limit to 4 workers max for scraping
+
+// Worker thread pool for CPU-intensive scraping tasks
+class ScrapingWorkerPool {
+  constructor() {
+    this.workers = [];
+    this.queue = [];
+    this.maxWorkers = MAX_WORKERS;
+    this.activeJobs = new Map();
+    this.jobId = 0;
+  }
+
+  async init() {
+    console.log(`🏭 Initializing worker pool with ${this.maxWorkers} workers...`);
+    for (let i = 0; i < this.maxWorkers; i++) {
+      this.createWorker();
+    }
+  }
+
+  createWorker() {
+    const worker = new Worker(__filename, {
+      workerData: { isWorker: true }
+    });
+
+    worker.on('message', (result) => {
+      const { jobId, data, error } = result;
+      const job = this.activeJobs.get(jobId);
+      if (job) {
+        this.activeJobs.delete(jobId);
+        if (error) {
+          job.reject(new Error(error));
+        } else {
+          job.resolve(data);
+        }
+      }
+    });
+
+    worker.on('error', (error) => {
+      console.error('🔥 Worker error:', error);
+      this.replaceWorker(worker);
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0) {
+        console.warn(`🔄 Worker exited with code ${code}, replacing...`);
+        this.replaceWorker(worker);
+      }
+    });
+
+    this.workers.push(worker);
+    return worker;
+  }
+
+  replaceWorker(deadWorker) {
+    const index = this.workers.indexOf(deadWorker);
+    if (index !== -1) {
+      this.workers.splice(index, 1);
+      this.createWorker();
+    }
+  }
+
+  async execute(url, options) {
+    return new Promise((resolve, reject) => {
+      const jobId = ++this.jobId;
+      this.activeJobs.set(jobId, { resolve, reject });
+
+      // Find least busy worker (simple round-robin)
+      const worker = this.workers[jobId % this.workers.length];
+      
+      worker.postMessage({
+        jobId,
+        url,
+        options
+      });
+    });
+  }
+
+  async shutdown() {
+    console.log('🔒 Shutting down worker pool...');
+    await Promise.all(this.workers.map(worker => worker.terminate()));
+  }
+}
+
+// Initialize worker pool if not in worker thread
+let scrapingPool = null;
+if (isMainThread && !workerData?.isWorker) {
+  scrapingPool = new ScrapingWorkerPool();
+}
+
+// Handle worker thread execution
+if (!isMainThread && workerData?.isWorker) {
+  // This code runs in worker threads
+  parentPort.on('message', async ({ jobId, url, options }) => {
+    try {
+      console.log(`🔧 Worker processing job ${jobId} for: ${url}`);
+      const result = await playwrightScraper.findAndScrapeMenu(url, options);
+      parentPort.postMessage({ jobId, data: result });
+    } catch (error) {
+      console.error(`🔥 Worker job ${jobId} failed:`, error.message);
+      parentPort.postMessage({ jobId, error: error.message });
+    }
+  });
+  
+  // Exit worker thread setup early
+  return;
+}
 
 const app = express();
 
@@ -18,10 +130,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Rate limiting - increased for better server
+// Rate limiting - optimized for multithreaded server
 const rateLimiter = new RateLimiterMemory({
   keyFunction: (req) => req.ip,
-  points: 30, // 30 requests
+  points: 50, // Increased for multithreaded server
   duration: 60, // per 60 seconds by IP
   blockDuration: 60, // block for 60 seconds if limit exceeded
 });
@@ -44,7 +156,8 @@ app.use((req, res, next) => {
   
   res.send = function(data) {
     const duration = Date.now() - start;
-    console.log(`${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+    const workerId = cluster.isWorker ? `W${cluster.worker.id}` : 'M';
+    console.log(`[${workerId}] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
     originalSend.call(this, data);
   };
   
@@ -92,253 +205,37 @@ const urlValidationMiddleware = (req, res, next) => {
   next();
 };
 
-// Health check endpoint
+// Health check endpoint with multithreading info
 app.get('/health', (req, res) => {
   const stats = playwrightScraper.getStats();
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    server: 'GreenCompass Backend',
-    version: '1.0.0',
+    server: 'GreenCompass Backend (Multithreaded)',
+    version: '2.0.0',
+    cluster: {
+      isMaster: cluster.isMaster,
+      isWorker: cluster.isWorker,
+      workerId: cluster.worker?.id || null,
+      totalWorkers: Object.keys(cluster.workers || {}).length
+    },
     scraper: {
       activeScrapes: stats.activeScrapes,
       maxConcurrent: stats.maxConcurrent,
       browserActive: stats.browserActive
     },
-    uptime: process.uptime(),
-    memory: process.memoryUsage()
-  });
-});
-
-// API documentation endpoint
-app.get('/api/docs', (req, res) => {
-  res.json({
-    title: 'GreenCompass Backend API',
-    version: '1.0.0',
-    description: 'Menu scraping API using Playwright for reliable extraction',
-    endpoints: {
-      'POST /api/scrape-menu-complete': {
-        description: 'Complete menu discovery and scraping - finds menu page intelligently then scrapes it',
-        body: {
-          url: 'string (required) - Restaurant website URL (homepage is fine)',
-          options: {
-            waitForSelector: 'string (optional) - CSS selector to wait for',
-            mobile: 'boolean (optional) - Use mobile viewport',
-            timeout: 'number (optional) - Request timeout in ms (1000-60000)'
-          }
-        },
-        response: {
-          success: 'boolean',
-          url: 'string - Original URL',
-          menuPageUrl: 'string - Discovered menu page URL',
-          menuItems: 'array of objects with name, price, description',
-          categories: 'array of strings',
-          restaurantInfo: 'object with name, url',
-          extractionTime: 'number (milliseconds)',
-          discoveryMethod: 'string - How the menu was found'
-        },
-        example: {
-          request: {
-            url: 'https://restaurant-example.com',
-            options: {
-              mobile: true,
-              timeout: 120000
-            }
-          },
-          response: {
-            success: true,
-            url: 'https://restaurant-example.com',
-            menuPageUrl: 'https://restaurant-example.com/menu',
-            menuItems: [
-              {
-                name: 'Veggie Burger',
-                price: '$12.99',
-                description: 'Plant-based patty with fresh vegetables'
-              }
-            ],
-            categories: ['Mains', 'Appetizers'],
-            restaurantInfo: {
-              name: 'Green Eats Restaurant'
-            },
-            extractionTime: 3500,
-            discoveryMethod: 'common-paths'
-          }
-        }
-      },
-      'POST /api/parse-pdf-menu': {
-        description: 'Parse restaurant menu from a PDF file',
-        body: {
-          url: 'string (required) - Direct URL to PDF menu file',
-          options: {
-            timeout: 'number (optional) - Request timeout in ms (1000-60000)'
-          }
-        },
-        response: {
-          success: 'boolean',
-          url: 'string - PDF URL',
-          menuItems: 'array of objects with name, price, description, category',
-          categories: 'array of strings',
-          restaurantInfo: 'object with name, phone, website if found',
-          extractionTime: 'number (milliseconds)',
-          discoveryMethod: 'pdf-parsing',
-          rawText: 'string - Sample of extracted text for debugging'
-        },
-        example: {
-          request: {
-            url: 'https://restaurant-example.com/menu.pdf',
-            options: {
-              timeout: 120000
-            }
-          },
-          response: {
-            success: true,
-            url: 'https://restaurant-example.com/menu.pdf',
-            menuItems: [
-              {
-                name: 'Caesar Salad',
-                price: '$8.95',
-                description: 'Romaine lettuce with parmesan and croutons',
-                category: 'appetizer'
-              }
-            ],
-            categories: ['appetizer', 'main', 'dessert'],
-            restaurantInfo: {
-              name: 'Bistro Example',
-              phone: '555-123-4567'
-            },
-            extractionTime: 2500,
-            discoveryMethod: 'pdf-parsing'
-          }
-        }
-      },
-      'POST /api/scrape-playwright': {
-        description: 'Direct menu scraping from a specific URL (legacy endpoint)',
-        body: {
-          url: 'string (required) - Direct menu page URL',
-          options: {
-            waitForSelector: 'string (optional) - CSS selector to wait for',
-            mobile: 'boolean (optional) - Use mobile viewport',
-            timeout: 'number (optional) - Request timeout in ms (1000-60000)'
-          }
-        },
-        response: {
-          success: 'boolean',
-          url: 'string',
-          menuItems: 'array of objects with name, price, description',
-          categories: 'array of strings',
-          restaurantInfo: 'object with name, url',
-          extractionTime: 'number (milliseconds)'
-        },
-        example: {
-          request: {
-            url: 'https://restaurant-example.com/menu',
-            options: {
-              mobile: true,
-              timeout: 120000
-            }
-          },
-          response: {
-            success: true,
-            url: 'https://restaurant-example.com/menu',
-            menuItems: [
-              {
-                name: 'Veggie Burger',
-                price: '$12.99',
-                description: 'Plant-based patty with fresh vegetables'
-              }
-            ],
-            categories: ['Mains', 'Appetizers'],
-            restaurantInfo: {
-              name: 'Green Eats Restaurant'
-            },
-            extractionTime: 3500
-          }
-        }
-      },
-      'GET /health': {
-        description: 'Server health check and status',
-        response: {
-          status: 'string',
-          timestamp: 'string',
-          server: 'string',
-          version: 'string',
-          scraper: 'object with scraper statistics',
-          uptime: 'number',
-          memory: 'object'
-        }
-      },
-      'GET /api/stats': {
-        description: 'Server performance statistics',
-        response: {
-          timestamp: 'string',
-          activeScrapes: 'number',
-          maxConcurrent: 'number',
-          browserActive: 'boolean',
-          uptime: 'number',
-          memory: 'object'
-        }
-      }
+    workerPool: {
+      enabled: !!scrapingPool,
+      workers: scrapingPool?.workers?.length || 0,
+      activeJobs: scrapingPool?.activeJobs?.size || 0
     },
-    rateLimit: {
-      requests: 30,
-      window: '60 seconds',
-      blockDuration: '60 seconds'
-    }
-  });
-});
-
-// Server statistics endpoint
-app.get('/api/stats', (req, res) => {
-  const stats = playwrightScraper.getStats();
-  res.json({
-    timestamp: new Date().toISOString(),
-    ...stats,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
-    nodeVersion: process.version,
-    platform: process.platform
+    cpus: numCPUs
   });
 });
 
-// PDF menu parsing endpoint
-app.post('/api/parse-pdf-menu', urlValidationMiddleware, async (req, res) => {
-  const { url, options = {} } = req.body;
-  
-  try {
-    console.log(`📄 PDF menu parsing request received for: ${url}`);
-    
-    // Validate that this is actually a PDF URL
-    if (!url.toLowerCase().includes('.pdf')) {
-      return res.status(400).json({
-        success: false,
-        error: 'URL does not appear to be a PDF file',
-        url: url
-      });
-    }
-    
-    const pdfParser = require('./services/pdfParser');
-    const result = await pdfParser.parsePDFMenu(url, options);
-    
-    if (result.success) {
-      console.log(`✅ PDF parsing completed successfully: ${result.menuItems?.length || 0} items`);
-    } else {
-      console.log(`❌ PDF parsing failed: ${result.error}`);
-    }
-    
-    res.json(result);
-    
-  } catch (error) {
-    console.error(`💥 PDF parsing error for ${url}:`, error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      url: url,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Complete menu discovery and scraping endpoint
+// Complete menu discovery and scraping endpoint (with worker pool)
 app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) => {
   const { url, options = {} } = req.body;
   
@@ -354,13 +251,23 @@ app.post('/api/scrape-menu-complete', urlValidationMiddleware, async (req, res) 
         url: url
       });
     }
-    
-    const result = await playwrightScraper.findAndScrapeMenu(url, {
+
+    const scrapingOptions = {
       waitForSelector: optionsValidation.sanitized.waitForSelector,
       mobile: optionsValidation.sanitized.mobile || options.mobile || false,
       timeout: optionsValidation.sanitized.timeout || options.timeout || 120000,
       includeDiscovery: true
-    });
+    };
+
+    // Use worker pool for CPU-intensive scraping if available
+    let result;
+    if (scrapingPool && scrapingPool.workers.length > 0) {
+      console.log(`🏭 Delegating to worker pool (${scrapingPool.workers.length} workers available)`);
+      result = await scrapingPool.execute(url, scrapingOptions);
+    } else {
+      console.log(`🔧 Processing on main thread (worker pool not available)`);
+      result = await playwrightScraper.findAndScrapeMenu(url, scrapingOptions);
+    }
     
     if (result.success) {
       console.log(`✅ Complete scraping completed successfully: ${result.menuItems?.length || 0} items`);
@@ -398,12 +305,23 @@ app.post('/api/scrape-playwright', urlValidationMiddleware, async (req, res) => 
         url: url
       });
     }
-    
-    const result = await playwrightScraper.scrapeMenuData(url, {
+
+    const scrapingOptions = {
       waitForSelector: optionsValidation.sanitized.waitForSelector,
       mobile: optionsValidation.sanitized.mobile || options.mobile || false,
-      timeout: optionsValidation.sanitized.timeout || options.timeout || 120000
-    });
+      timeout: optionsValidation.sanitized.timeout || options.timeout || 120000,
+      skipDiscovery: true
+    };
+
+    // Use worker pool for CPU-intensive scraping if available
+    let result;
+    if (scrapingPool && scrapingPool.workers.length > 0) {
+      console.log(`🏭 Delegating direct scraping to worker pool`);
+      result = await scrapingPool.execute(url, scrapingOptions);
+    } else {
+      console.log(`🔧 Processing direct scraping on main thread`);
+      result = await playwrightScraper.scrapeMenuData(url, scrapingOptions);
+    }
     
     if (result.success) {
       console.log(`✅ Direct scraping completed successfully: ${result.menuItems?.length || 0} items`);
@@ -424,89 +342,129 @@ app.post('/api/scrape-playwright', urlValidationMiddleware, async (req, res) => 
   }
 });
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('🚨 Server Error:', error);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Endpoint not found',
-    message: `${req.method} ${req.originalUrl} is not a valid endpoint`,
-    availableEndpoints: [
-      'GET /health',
-      'GET /api/docs',
-      'GET /api/stats',
-      'POST /api/scrape-menu-complete',
-      'POST /api/parse-pdf-menu',
-      'POST /api/scrape-playwright'
-    ],
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Start server
-const server = app.listen(PORT, HOST, () => {
-  const vmIP = process.env.VM_IP || 'YOUR_VM_IP';
-  
-  console.log('🚀 GreenCompass Backend Server Started');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`📍 Local: http://localhost:${PORT}`);
-  console.log(`🌐 Network: http://${vmIP}:${PORT}`);
-  console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
-  console.log(`📊 Stats: http://${vmIP}:${PORT}/api/stats`);
-  console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
-  console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
-  console.log(`� PDF Parser API: POST http://${vmIP}:${PORT}/api/parse-pdf-menu`);
-  console.log(`�🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`🔗 Frontend Configuration:`);
-  console.log(`   EXPO_PUBLIC_BACKEND_URL=http://${vmIP}:${PORT}`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`💾 Performance Settings:`);
-  console.log(`   Rate limit: 30 requests/minute`);
-  console.log(`   Max concurrent: 10 scrapes`);
-  console.log(`   Timeout: 2 minutes default`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-});
-
-// Set server timeout to 5 minutes to allow for long-running operations
-server.timeout = 300000; // 5 minutes
-
-// Graceful shutdown
-const gracefulShutdown = async (signal) => {
-  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
-  
-  server.close(async () => {
-    console.log('📡 HTTP server closed');
-    
-    try {
-      await playwrightScraper.closeBrowser();
-      console.log('🌐 Browser closed');
-      console.log('✅ Graceful shutdown complete');
-      process.exit(0);
-    } catch (error) {
-      console.error('❌ Error during shutdown:', error.message);
-      process.exit(1);
+// API documentation endpoint
+app.get('/api/docs', (req, res) => {
+  res.json({
+    title: 'GreenCompass Backend API (Multithreaded)',
+    version: '2.0.0',
+    description: 'High-performance menu scraping API with worker threads and clustering',
+    performance: {
+      clustering: ENABLE_CLUSTERING,
+      workerThreads: MAX_WORKERS,
+      concurrentScrapes: 10,
+      rateLimit: '50 requests/minute'
+    },
+    endpoints: {
+      'GET /health': 'Health check with multithreading statistics',
+      'GET /api/docs': 'This documentation',
+      'POST /api/scrape-menu-complete': 'Complete menu discovery and scraping (recommended)',
+      'POST /api/scrape-playwright': 'Direct menu scraping from specific URL'
     }
   });
-  
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.log('⏰ Force closing after timeout...');
-    process.exit(1);
-  }, 10000);
+});
+
+// Start server with clustering and worker pool support
+const startServer = async () => {
+  // Initialize worker pool for scraping tasks
+  if (scrapingPool) {
+    try {
+      await scrapingPool.init();
+      console.log(`✅ Worker pool initialized with ${scrapingPool.workers.length} workers`);
+    } catch (error) {
+      console.warn(`⚠️ Worker pool initialization failed: ${error.message}`);
+      console.log(`🔧 Continuing with main thread processing only`);
+    }
+  }
+
+  const server = app.listen(PORT, HOST, () => {
+    const vmIP = process.env.VM_IP || 'YOUR_VM_IP';
+    const workerId = cluster.isWorker ? ` (Worker ${cluster.worker.id})` : '';
+    
+    console.log(`🚀 GreenCompass Backend Server Started${workerId}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`📍 Local: http://localhost:${PORT}`);
+    console.log(`🌐 Network: http://${vmIP}:${PORT}`);
+    console.log(`🔍 Health: http://${vmIP}:${PORT}/health`);
+    console.log(`📖 Docs: http://${vmIP}:${PORT}/api/docs`);
+    console.log(`🎯 Complete API: POST http://${vmIP}:${PORT}/api/scrape-menu-complete`);
+    console.log(`🔧 Direct API: POST http://${vmIP}:${PORT}/api/scrape-playwright`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`🔗 Frontend Configuration:`);
+    console.log(`   EXPO_PUBLIC_BACKEND_URL=http://${vmIP}:${PORT}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`⚡ Performance Settings:`);
+    console.log(`   Rate limit: 50 requests/minute`);
+    console.log(`   Max concurrent: 10 scrapes`);
+    console.log(`   Timeout: 2 minutes default`);
+    console.log(`   Worker threads: ${scrapingPool?.workers?.length || 0}`);
+    console.log(`   Clustering: ${ENABLE_CLUSTERING ? 'Enabled' : 'Disabled'}`);
+    console.log(`   CPU cores: ${numCPUs}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  });
+
+  // Set server timeout to 5 minutes to allow for long-running operations
+  server.timeout = 300000; // 5 minutes
+
+  return server;
 };
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Clustering setup
+if (ENABLE_CLUSTERING && cluster.isMaster) {
+  console.log(`🏭 Master process ${process.pid} is running`);
+  console.log(`🔄 Starting ${numCPUs} worker processes...`);
+
+  // Fork workers
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
+
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`💥 Worker ${worker.process.pid} died with code ${code} and signal ${signal}`);
+    console.log('🔄 Starting a new worker...');
+    cluster.fork();
+  });
+
+  cluster.on('online', (worker) => {
+    console.log(`✅ Worker ${worker.process.pid} is online`);
+  });
+
+} else {
+  // Worker process or single-threaded mode
+  startServer().then(server => {
+    // Graceful shutdown
+    const gracefulShutdown = async (signal) => {
+      console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+      
+      server.close(async () => {
+        console.log('📡 HTTP server closed');
+        
+        try {
+          // Shutdown worker pool
+          if (scrapingPool) {
+            await scrapingPool.shutdown();
+            console.log('🏭 Worker pool shut down');
+          }
+          
+          await playwrightScraper.closeBrowser();
+          console.log('🌐 Browser closed');
+          console.log('✅ Graceful shutdown complete');
+          process.exit(0);
+        } catch (error) {
+          console.error('❌ Error during shutdown:', error.message);
+          process.exit(1);
+        }
+      });
+      
+      // Force close after 10 seconds
+      setTimeout(() => {
+        console.log('⏰ Force closing after timeout...');
+        process.exit(1);
+      }, 10000);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  });
+}
 
 module.exports = app;
