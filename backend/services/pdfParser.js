@@ -863,7 +863,7 @@ Return ONLY valid JSON.`;
       console.log(`[PDF JSON Parser] Standard parse failed: ${error.message}`);
       
       try {
-        // Clean common JSON issues
+        // Clean common JSON issues including control characters
         let cleaned = jsonString
           // Remove trailing commas before closing brackets/braces
           .replace(/,(\s*[}\]])/g, '$1')
@@ -872,6 +872,12 @@ Return ONLY valid JSON.`;
           // Remove comments
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/\/\/.*$/gm, '')
+          // Fix control characters in strings
+          .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+          // Fix unescaped quotes within strings (basic attempt)
+          .replace(/"([^"]*)"([^"]*)"([^"]*)":/g, '"$1$2$3":')
+          // Escape backslashes that aren't already escaped
+          .replace(/\\(?!["\\/bfnrt])/g, '\\\\')
           // Trim whitespace
           .trim();
         
@@ -889,10 +895,36 @@ Return ONLY valid JSON.`;
             // Fix trailing commas in the extracted part
             extracted = extracted.replace(/,(\s*[}\]])/g, '$1');
             
+            // Additional control character cleaning for extracted JSON
+            extracted = extracted.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+            
             return JSON.parse(extracted);
           }
         } catch (extractError) {
           console.log(`[PDF JSON Parser] Extract parse failed: ${extractError.message}`);
+        }
+        
+        // Last resort: try to fix specific control character issues
+        try {
+          let lastResort = jsonString
+            .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ') // Remove all control characters
+            .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
+            .replace(/\\n/g, ' ') // Replace literal \n with space
+            .replace(/\\t/g, ' ') // Replace literal \t with space
+            .replace(/\\r/g, ' ') // Replace literal \r with space
+            .replace(/\n/g, ' ') // Replace actual newlines with space
+            .replace(/\t/g, ' ') // Replace actual tabs with space
+            .replace(/\r/g, ' ') // Replace actual carriage returns with space
+            .replace(/\s+/g, ' ') // Collapse multiple spaces
+            .trim();
+          
+          // Extract JSON from the cleaned string
+          const match = lastResort.match(/[\{\[][\s\S]*[\}\]]/);
+          if (match) {
+            return JSON.parse(match[0]);
+          }
+        } catch (lastResortError) {
+          console.log(`[PDF JSON Parser] Last resort parse failed: ${lastResortError.message}`);
         }
         
         console.error(`[PDF JSON Parser] All parsing attempts failed for: ${jsonString.substring(0, 200)}...`);
