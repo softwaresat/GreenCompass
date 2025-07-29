@@ -8,7 +8,7 @@ const axios = require('axios');
 
 class PDFParser {
   constructor() {
-    this.maxPdfSize = 10 * 1024 * 1024; // 10MB limit
+    this.maxPdfSize = 50 * 1024 * 1024; // 50MB limit - increased for larger restaurant menus
   }
 
   /**
