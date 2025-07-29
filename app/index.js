@@ -60,13 +60,14 @@ export default function HomeScreen() {
         {
           text: 'Regenerate',
           onPress: () => {
-            router.push({
-              pathname: '/analysis',
-              params: {
-                id: report.restaurantId,
-                name: report.restaurant.name,
-                vicinity: report.restaurant.vicinity || '',
-              },
+                    router.push({
+          pathname: '/analysis',
+          params: {
+            id: report.restaurantId,
+            name: report.restaurant.name,
+            vicinity: report.restaurant.vicinity || '',
+            regenerate: 'true', // Flag to auto-save after regeneration
+          },
             });
           },
         },

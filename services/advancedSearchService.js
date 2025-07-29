@@ -314,8 +314,8 @@ const performAIVegAnalysis = async (menuItems, restaurantName) => {
  * @returns {string} Analysis prompt
  */
 const createBatchAnalysisPrompt = (menuItems, restaurantName) => {
-  // Limit to 40 items to prevent token overflow
-  const limitedItems = menuItems.slice(0, 40);
+  // Limit to 60 items for better performance while preventing token overflow
+  const limitedItems = menuItems.slice(0, 60);
   
   const itemsText = limitedItems.map((item, index) => {
     const name = item.name || `Item ${index + 1}`;
@@ -326,6 +326,11 @@ const createBatchAnalysisPrompt = (menuItems, restaurantName) => {
 
   return `Detailed vegetarian analysis for "${restaurantName}". Identify ALL vegetarian items (no meat, fish, poultry, seafood).
 
+FORMATTING INSTRUCTIONS:
+- NORMALIZE menu item names: Convert ALL CAPS to proper title case (e.g., "BUFFALO CHICKEN DIP" → "Buffalo Chicken Dip")
+- Clean up excessive capitalization and make names professional and readable
+- Fix obvious formatting issues while preserving original language
+
 MENU ITEMS:
 ${itemsText}
 
@@ -333,7 +338,7 @@ Analyze and respond with JSON:
 {
   "vegetarianItems": [
     {
-      "name": "Item name",
+      "name": "Properly Formatted Item Name",
       "isVegan": true/false,
       "confidence": 0.9
     }
@@ -341,7 +346,8 @@ Analyze and respond with JSON:
   "vegetarianCount": number,
   "vegFriendliness": "excellent|good|fair|poor",
   "confidence": 0.8,
-  "summary": "Detailed summary of vegetarian options"
+  "summary": "Detailed summary of vegetarian options",
+  "extractedCategories": ["List of menu categories found on the website if any"]
 }
 
 Categories:
@@ -653,8 +659,8 @@ const quickAIAnalysis = async (menuItems, restaurantName) => {
  * @returns {string} Analysis prompt
  */
 const createQuickAnalysisPrompt = (menuItems, restaurantName) => {
-  // Limit items to prevent token overflow
-  const limitedItems = menuItems.slice(0, 50);
+  // Limit items for optimal performance while preventing token overflow
+  const limitedItems = menuItems.slice(0, 75);
   
   const itemsText = limitedItems.map((item, index) => {
     const name = item.name || `Item ${index + 1}`;

@@ -97,6 +97,7 @@ export default function SavedRestaurantsScreen() {
                 id: report.restaurantId,
                 name: report.restaurant.name,
                 vicinity: report.restaurant.vicinity || '',
+                regenerate: 'true', // Flag to auto-save after regeneration
               },
             });
           },

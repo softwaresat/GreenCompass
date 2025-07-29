@@ -119,6 +119,46 @@ export default function AnalysisScreen() {
 
       setResults(finalResults);
 
+      // Auto-save if this is a regeneration
+      if (regenerate === 'true') {
+        console.log('Auto-saving regenerated analysis...');
+        try {
+          const reportData = {
+            restaurant: {
+              id: id,
+              name: finalResults.restaurantInfo?.name || name,
+              vicinity: finalResults.restaurantInfo?.vicinity || vicinity || '',
+              rating: finalResults.restaurantInfo?.rating,
+              priceLevel: finalResults.restaurantInfo?.priceLevel,
+              location: finalResults.restaurantInfo?.location,
+              website: finalResults.restaurantInfo?.website,
+            },
+            restaurantId: id,
+            analysis: {
+              summary: finalResults.menuAnalysis?.summary || '',
+              vegFriendliness: finalResults.overallRating,
+              totalItems: finalResults.totalItems,
+              confidence: finalResults.confidence,
+              recommendations: finalResults.recommendations || [],
+              vegetarianItems: finalResults.vegetarianItems || [],
+              enhancedMenuItems: finalResults.enhancedMenuItems || [],
+              menuAnalysis: finalResults.menuAnalysis,
+              scrapingInfo: finalResults.scrapingInfo,
+              analysisDate: finalResults.analysisDate,
+            },
+            vegCriteria: 'standard',
+            savedAt: new Date().toISOString(),
+          };
+
+          await savedReportsService.saveRestaurantReport(reportData);
+          setIsSaved(true);
+          console.log('Regenerated analysis auto-saved successfully');
+        } catch (error) {
+          console.error('Error auto-saving regenerated analysis:', error);
+          // Don't show alert for auto-save failure during regeneration
+        }
+      }
+
     } catch (error) {
       setError(error.message || 'An error occurred during analysis');
       setProgress(prev => ({ ...prev, complete: true }));

@@ -84,7 +84,12 @@ export default function SavedAnalysisScreen() {
           onPress: () => {
             router.replace({
               pathname: '/analysis',
-              params: { id: restaurantId, name, vicinity },
+              params: { 
+                id: restaurantId, 
+                name, 
+                vicinity,
+                regenerate: 'true', // Flag to auto-save after regeneration
+              },
             });
           },
         },

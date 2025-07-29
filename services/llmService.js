@@ -60,8 +60,8 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
       console.log(`[DEBUG] AI determined "${restaurantName}" is NOT a fully vegetarian restaurant (${vegetarianCheck.confidence} confidence)`);
     }
     
-    // Use smaller batching for initial analysis to prevent timeouts
-    const analysisBatchSize = 15; // Even smaller batch size for most problematic restaurants
+    // Use optimized batching for initial analysis to improve performance
+    const analysisBatchSize = 30; // Increased batch size for better performance while avoiding timeouts
     const analysisBatches = splitIntoBatches(menuItems, analysisBatchSize);
     console.log(`[DEBUG] Split ${menuItems.length} menu items into ${analysisBatches.length} batches of up to ${analysisBatchSize} items each for analysis`);
     
@@ -121,8 +121,9 @@ export const analyzeScrapedMenuForVegetarianOptions = async (menuItems, restaura
     
     console.log(`[DEBUG] Analysis complete. ${successfulAnalysisBatches}/${analysisBatches.length} analysis batches processed successfully`);
     
-    // Aggregate all analysis results
+    // Aggregate all analysis results and collect extracted categories
     let vegetarianAnalysis = null;
+    const allExtractedCategories = [];
     if (successfulAnalysisBatches > 0) {
       vegetarianAnalysis = aggregateBatchResults(analysisResults);
       console.log(`[DEBUG] Aggregated analysis: ${vegetarianAnalysis.vegetarianItems.length} vegetarian items, ${vegetarianAnalysis.restaurantVegFriendliness} friendliness`);
@@ -526,6 +527,7 @@ const splitIntoBatches = (arr, batchSize) => {
 const aggregateBatchResults = (batchResults) => {
   const allVegetarianItems = batchResults.flatMap(r => r.vegetarianItems || []);
   const allRecommendations = batchResults.flatMap(r => r.recommendations || []);
+  const allExtractedCategories = batchResults.flatMap(r => r.extractedCategories || []);
   const confidences = batchResults.map(r => r.confidence).filter(c => typeof c === 'number');
   const totalItems = batchResults.reduce((sum, r) => sum + (r.totalItems || 0), 0);
   
@@ -567,6 +569,7 @@ const aggregateBatchResults = (batchResults) => {
     totalItems,
     confidence: avgConfidence,
     recommendations: Array.from(new Set(allRecommendations)), // Remove duplicates
+    extractedCategories: Array.from(new Set(allExtractedCategories.filter(cat => cat && cat.length > 0))), // Remove duplicates and empty categories
   };
 };
 
@@ -779,11 +782,17 @@ EXAMPLES OF WHAT TO EXCLUDE:
 - "Private Events" → EXCLUDE (menu section, not a food item)
 - "Appetizers" → EXCLUDE (menu category, not a specific food item)
 
+IMPORTANT FORMATTING INSTRUCTIONS:
+- NORMALIZE menu item names: Convert from ALL CAPS to proper title case (e.g., "CAESAR SALAD" → "Caesar Salad")
+- Clean up excessive capitalization and make names readable
+- Preserve original language but make formatting consistent and professional
+- Fix obvious typos or formatting issues in item names
+
 RESPONSE FORMAT (JSON):
 {
   "vegetarianItems": [
     {
-      "name": "Item Name",
+      "name": "Properly Formatted Item Name", 
       "description": "Brief description if available, if not available, create a description based on your knowledge of your item with a disclaimer",
       "price": "Price if listed",
       "category": "appetizer|main|side|dessert|beverage",
@@ -796,7 +805,8 @@ RESPONSE FORMAT (JSON):
   "restaurantVegFriendliness": "excellent|good|fair|limited",
   "totalItems": 12,
   "confidence": 0.85,
-  "recommendations": ["Specific recommendations for vegetarians"]
+  "recommendations": ["Specific recommendations for vegetarians"],
+  "extractedCategories": ["List of menu categories found on the website if any"]
 }
 
 IMPORTANT: 
@@ -1015,7 +1025,8 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       restaurantVegFriendliness: parsed.restaurantVegFriendliness || 'fair',
       totalItems: parsed.totalItems || parsed.vegetarianItems?.length || 0,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+      extractedCategories: Array.isArray(parsed.extractedCategories) ? parsed.extractedCategories : []
     };
     
     
@@ -1031,7 +1042,8 @@ const parseScrapedMenuAnalysis = (content, menuItems) => {
       restaurantVegFriendliness: 'unknown',
       totalItems: menuItems.length,
       confidence: 0.0,
-      recommendations: []
+      recommendations: [],
+      extractedCategories: []
     };
   }
 };
