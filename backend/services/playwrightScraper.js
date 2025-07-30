@@ -1394,107 +1394,448 @@ Return ONLY JSON:
   async extractMenuData(page, url) {
     try {
       const menuData = await page.evaluate(() => {
-        // Enhanced menu extraction logic
+        // ADVANCED MULTI-STRATEGY MENU EXTRACTION SYSTEM 🚀
         const results = {
           menuItems: [],
           categories: [],
           restaurantInfo: {},
-          rawText: ''
+          rawText: '',
+          extractionStrategy: 'unknown',
+          confidence: 0
         };
 
         // Get page title and basic info
         results.restaurantInfo.name = document.title;
         results.restaurantInfo.url = window.location.href;
 
-        // Common menu selectors (more comprehensive)
-        const menuSelectors = [
-          '[class*="menu"]',
-          '[class*="item"]', 
-          '[class*="dish"]',
-          '[class*="food"]',
-          '[class*="product"]',
-          '[id*="menu"]',
-          '[data-*="menu"]',
-          '.card',
-          '.listing',
-          'article',
-          '[role="listitem"]'
-        ];
-
-        const priceSelectors = [
-          '[class*="price"]',
-          '[class*="cost"]',
-          '[class*="amount"]',
-          '.currency',
-          '[data-*="price"]'
-        ];
-
-        // Extract menu items
-        const menuElements = document.querySelectorAll(menuSelectors.join(','));
-        const seenItems = new Set();
-
-        menuElements.forEach((element, index) => {
-          const text = element.textContent?.trim();
-          if (!text || text.length < 5 || seenItems.has(text)) return;
+        // ========== STRATEGY 1: STRUCTURED DATA EXTRACTION ==========
+        const extractFromStructuredData = () => {
+          const items = [];
           
-          // Look for price in element
-          let price = '';
-          const priceElement = element.querySelector(priceSelectors.join(','));
-          if (priceElement) {
-            price = priceElement.textContent?.trim() || '';
-          } else {
-            // Look for price pattern in text
-            const priceMatch = text.match(/[$£€¥₹][\d,]+\.?\d*/);
-            if (priceMatch) price = priceMatch[0];
+          // JSON-LD Schema.org data
+          const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+          jsonLdScripts.forEach(script => {
+            try {
+              const data = JSON.parse(script.textContent);
+              const extractFromSchema = (obj) => {
+                if (obj['@type'] === 'MenuItem' || obj['@type'] === 'Product') {
+                  items.push({
+                    name: obj.name || '',
+                    price: obj.offers?.price || obj.price || '',
+                    description: obj.description || '',
+                    category: obj.category || '',
+                    fullText: JSON.stringify(obj),
+                    strategy: 'json-ld'
+                  });
+                }
+                // Recursively search nested objects
+                if (typeof obj === 'object' && obj !== null) {
+                  Object.values(obj).forEach(value => {
+                    if (Array.isArray(value)) {
+                      value.forEach(extractFromSchema);
+                    } else if (typeof value === 'object') {
+                      extractFromSchema(value);
+                    }
+                  });
+                }
+              };
+              extractFromSchema(data);
+            } catch (e) { /* Invalid JSON */ }
+          });
+
+          // Microdata extraction
+          document.querySelectorAll('[itemscope][itemtype*="MenuItem"], [itemscope][itemtype*="Product"]').forEach(item => {
+            const name = item.querySelector('[itemprop="name"]')?.textContent?.trim() || '';
+            const price = item.querySelector('[itemprop="price"], [itemprop="lowPrice"], [itemprop="offers"] [itemprop="price"]')?.textContent?.trim() || '';
+            const description = item.querySelector('[itemprop="description"]')?.textContent?.trim() || '';
+            
+            if (name) {
+              items.push({
+                name,
+                price,
+                description,
+                fullText: item.textContent?.trim() || '',
+                strategy: 'microdata'
+              });
+            }
+          });
+
+          return items;
+        };
+
+        // ========== STRATEGY 2: TABLE EXTRACTION ==========
+        const extractFromTables = () => {
+          const items = [];
+          const tables = document.querySelectorAll('table');
+          
+          tables.forEach(table => {
+            const rows = table.querySelectorAll('tr');
+            if (rows.length < 2) return;
+
+            rows.forEach((row, index) => {
+              if (index === 0) return; // Skip header row
+              
+              const cells = row.querySelectorAll('td, th');
+              if (cells.length >= 2) {
+                const nameCell = cells[0]?.textContent?.trim() || '';
+                const priceCell = cells[cells.length - 1]?.textContent?.trim() || '';
+                const descCell = cells.length > 2 ? cells[1]?.textContent?.trim() : '';
+                
+                // Check if this looks like a menu item
+                if (nameCell && (priceCell.match(/[$£€¥₹][\d,]+\.?\d*/) || descCell.length > 10)) {
+                  items.push({
+                    name: nameCell,
+                    price: priceCell,
+                    description: descCell,
+                    fullText: row.textContent?.trim() || '',
+                    strategy: 'table'
+                  });
+                }
+              }
+            });
+          });
+
+          return items;
+        };
+
+        // ========== STRATEGY 3: LIST EXTRACTION ==========
+        const extractFromLists = () => {
+          const items = [];
+          const lists = document.querySelectorAll('ul, ol, dl');
+          
+          lists.forEach(list => {
+            const listItems = list.querySelectorAll('li, dt');
+            if (listItems.length < 3) return; // Skip small lists
+            
+            listItems.forEach(li => {
+              const text = li.textContent?.trim() || '';
+              if (text.length < 10) return;
+              
+              // Enhanced price detection
+              const priceRegex = /(?:[$£€¥₹]\s*)?(?:\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)(?:\s*[$£€¥₹])?/g;
+              const prices = text.match(priceRegex) || [];
+              
+              if (prices.length > 0 || text.length > 20) {
+                const lines = text.split(/[\n\r•·–—]/).map(l => l.trim()).filter(l => l.length > 0);
+                const name = lines[0] || text.substring(0, 80);
+                const price = prices[0] || '';
+                const description = lines.slice(1).join(' ').substring(0, 200);
+                
+                items.push({
+                  name,
+                  price,
+                  description,
+                  fullText: text,
+                  strategy: 'list'
+                });
+              }
+            });
+          });
+
+          return items;
+        };
+
+        // ========== STRATEGY 4: CONTENT DENSITY ANALYSIS ==========
+        const extractFromContentDensity = () => {
+          const items = [];
+          
+          // Find areas with high menu-like content density
+          const candidates = document.querySelectorAll('div, section, article, main');
+          let bestContainer = null;
+          let bestScore = 0;
+          
+          candidates.forEach(container => {
+            const text = container.textContent || '';
+            const priceMatches = (text.match(/[$£€¥₹][\d,]+\.?\d*/g) || []).length;
+            const menuWords = (text.match(/\b(appetizer|entree|main|dessert|drink|special|combo|meal)\b/gi) || []).length;
+            const textLength = text.length;
+            
+            if (textLength > 200 && textLength < 10000) {
+              const score = (priceMatches * 10) + (menuWords * 5) + (textLength / 100);
+              if (score > bestScore) {
+                bestScore = score;
+                bestContainer = container;
+              }
+            }
+          });
+
+          if (bestContainer) {
+            // Enhanced extraction within the best container
+            const menuSelectors = [
+              '[class*="menu"] > *', '[class*="item"]', '[class*="dish"]', '[class*="food"]',
+              '[class*="product"]', '.card', '.listing', 'article', '[role="listitem"]',
+              'p:has([class*="price"]), div:has([class*="price"])'
+            ];
+
+            const elements = bestContainer.querySelectorAll(menuSelectors.join(','));
+            const seenTexts = new Set();
+
+            elements.forEach(element => {
+              const text = element.textContent?.trim() || '';
+              if (text.length < 15 || text.length > 500 || seenTexts.has(text)) return;
+              seenTexts.add(text);
+
+              // Advanced price extraction
+              const priceRegex = /(?:[$£€¥₹]\s*)?(?:\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)(?:\s*[$£€¥₹])?/g;
+              const prices = text.match(priceRegex) || [];
+              
+              // Smart name/description separation
+              const lines = text.split(/[\n\r•·–—]/).map(l => l.trim()).filter(l => l.length > 0);
+              const name = lines[0]?.replace(/[$£€¥₹][\d,]+\.?\d*/g, '').trim() || '';
+              const price = prices[0] || '';
+              const description = lines.slice(1).join(' ').replace(/[$£€¥₹][\d,]+\.?\d*/g, '').trim();
+
+              if (name.length > 2 && (price || description.length > 10)) {
+                items.push({
+                  name,
+                  price,
+                  description,
+                  fullText: text,
+                  strategy: 'content-density'
+                });
+              }
+            });
           }
 
-          // Extract name (first meaningful line)
-          const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-          const name = lines[0] || text.substring(0, 100);
+          return items;
+        };
+
+        // ========== STRATEGY 5: ORIGINAL EXTRACTION (COMPATIBILITY) ==========
+        const extractFromOriginalMethod = () => {
+          const items = [];
           
-          if (name.length > 2) {
-            results.menuItems.push({
-              name: name,
-              price: price,
-              description: lines.slice(1).join(' ').substring(0, 200),
-              fullText: text.substring(0, 300),
-              element: index
-            });
-            seenItems.add(text);
+          // Original menu selectors (preserve all original logic)
+          const menuSelectors = [
+            '[class*="menu"]',
+            '[class*="item"]', 
+            '[class*="dish"]',
+            '[class*="food"]',
+            '[class*="product"]',
+            '[id*="menu"]',
+            '[data-*="menu"]',
+            '.card',
+            '.listing',
+            'article',
+            '[role="listitem"]'
+          ];
+
+          const priceSelectors = [
+            '[class*="price"]',
+            '[class*="cost"]',
+            '[class*="amount"]',
+            '.currency',
+            '[data-*="price"]'
+          ];
+
+          // Extract menu items using original logic
+          const menuElements = document.querySelectorAll(menuSelectors.join(','));
+          const seenItems = new Set();
+
+          menuElements.forEach((element, index) => {
+            const text = element.textContent?.trim();
+            if (!text || text.length < 5 || seenItems.has(text)) return;
+            
+            // Look for price in element (original logic)
+            let price = '';
+            const priceElement = element.querySelector(priceSelectors.join(','));
+            if (priceElement) {
+              price = priceElement.textContent?.trim() || '';
+            } else {
+              // Look for price pattern in text
+              const priceMatch = text.match(/[$£€¥₹][\d,]+\.?\d*/);
+              if (priceMatch) price = priceMatch[0];
+            }
+
+            // Extract name (original logic)
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            const name = lines[0] || text.substring(0, 100);
+            
+            if (name.length > 2) {
+              items.push({
+                name: name,
+                price: price,
+                description: lines.slice(1).join(' ').substring(0, 200),
+                fullText: text.substring(0, 300),
+                strategy: 'original'
+              });
+              seenItems.add(text);
+            }
+          });
+
+          return items;
+        };
+
+        // ========== STRATEGY 6: VISUAL HIERARCHY ANALYSIS ==========
+        const extractFromVisualHierarchy = () => {
+          const items = [];
+          
+          // Find elements with menu-like visual patterns
+          const allElements = document.querySelectorAll('*');
+          const menuLikeElements = [];
+
+          allElements.forEach(el => {
+            const style = window.getComputedStyle(el);
+            const text = el.textContent?.trim() || '';
+            
+            // Check for menu-like visual patterns
+            const hasPrice = /[$£€¥₹][\d,]+\.?\d*/.test(text);
+            const isCard = style.border !== 'none' || style.boxShadow !== 'none';
+            const isFlexItem = style.display === 'flex' || style.display === 'inline-flex';
+            const hasGoodSize = text.length > 15 && text.length < 300;
+            
+            if (hasPrice && hasGoodSize && (isCard || isFlexItem)) {
+              menuLikeElements.push(el);
+            }
+          });
+
+          // Process menu-like elements
+          menuLikeElements.forEach(el => {
+            const text = el.textContent?.trim() || '';
+            const priceMatch = text.match(/[$£€¥₹][\d,]+\.?\d*/);
+            
+            if (priceMatch) {
+              const cleanText = text.replace(/[$£€¥₹][\d,]+\.?\d*/g, '').trim();
+              const parts = cleanText.split(/[\n\r•·–—]/).map(p => p.trim()).filter(p => p.length > 0);
+              
+              items.push({
+                name: parts[0] || cleanText.substring(0, 80),
+                price: priceMatch[0],
+                description: parts.slice(1).join(' ').substring(0, 200),
+                fullText: text,
+                strategy: 'visual-hierarchy'
+              });
+            }
+          });
+
+          return items;
+        };
+
+        // ========== STRATEGY 7: AGGRESSIVE TEXT MINING ==========
+        const extractFromAggressiveTextMining = () => {
+          const items = [];
+          
+          // Very liberal extraction for AI to filter later
+          const allTextNodes = document.querySelectorAll('p, div, span, li, td, th, section, article');
+          
+          allTextNodes.forEach(node => {
+            const text = node.textContent?.trim() || '';
+            if (text.length < 10 || text.length > 800) return;
+            
+            // Look for any text with price-like patterns
+            const priceRegex = /(?:[$£€¥₹€]\s*)?(?:\d{1,4}(?:[,.]\d{2,3})*(?:[,.]\d{2})?|\d+(?:[,.]\d{2})?)(?:\s*[$£€¥₹€])?/g;
+            const prices = text.match(priceRegex) || [];
+            
+            // If has price OR is substantial text that could be a menu item
+            if (prices.length > 0 || (text.length > 20 && text.length < 200)) {
+              // Split by common separators
+              const lines = text.split(/[\n\r•·–—\|\t]/).map(l => l.trim()).filter(l => l.length > 5);
+              
+              lines.forEach(line => {
+                if (line.length > 8 && line.length < 300) {
+                  const linePrice = line.match(priceRegex)?.[0] || '';
+                  const cleanName = line.replace(priceRegex, '').trim();
+                  
+                  if (cleanName.length > 3) {
+                    items.push({
+                      name: cleanName.substring(0, 100),
+                      price: linePrice,
+                      description: '',
+                      fullText: line,
+                      strategy: 'aggressive-mining'
+                    });
+                  }
+                }
+              });
+            }
+          });
+
+          return items;
+        };
+
+        // ========== EXECUTE ALL STRATEGIES ==========
+        const strategies = [
+          { name: 'structured-data', func: extractFromStructuredData },
+          { name: 'tables', func: extractFromTables },
+          { name: 'lists', func: extractFromLists },
+          { name: 'content-density', func: extractFromContentDensity },
+          { name: 'original', func: extractFromOriginalMethod },
+          { name: 'visual-hierarchy', func: extractFromVisualHierarchy },
+          { name: 'aggressive-mining', func: extractFromAggressiveTextMining }
+        ];
+
+        let allResults = [];
+        let bestStrategy = 'none';
+        let bestCount = 0;
+
+        strategies.forEach(strategy => {
+          try {
+            const items = strategy.func();
+            if (items.length > bestCount) {
+              bestCount = items.length;
+              bestStrategy = strategy.name;
+            }
+            allResults = allResults.concat(items.map(item => ({ ...item, strategy: strategy.name })));
+          } catch (error) {
+            console.log(`Strategy ${strategy.name} failed:`, error);
           }
         });
 
-        // Extract categories
+        // ========== MERGE AND DEDUPLICATE RESULTS ==========
+        const finalItems = [];
+        const seenNames = new Set();
+
+        // Prioritize high-quality extractions but include everything for AI filtering
+        const priorityOrder = ['structured-data', 'tables', 'content-density', 'original', 'lists', 'visual-hierarchy', 'aggressive-mining'];
+        
+        priorityOrder.forEach(strategyName => {
+          allResults.filter(item => item.strategy === strategyName).forEach(item => {
+            const normalizedName = item.name.toLowerCase().replace(/[^\w\s]/g, '').trim();
+            // More liberal deduplication - only skip exact duplicates
+            if (!seenNames.has(normalizedName) && item.name.length > 1) {
+              seenNames.add(normalizedName);
+              finalItems.push(item);
+            }
+          });
+        });
+
+        results.menuItems = finalItems.slice(0, 200); // Increased limit for AI filtering
+        results.extractionStrategy = bestStrategy;
+        results.confidence = Math.min(95, finalItems.length * 5);
+
+        // Enhanced category extraction
         const categorySelectors = [
-          'h1, h2, h3, h4',
-          '[class*="category"]',
-          '[class*="section"]',
-          '[class*="heading"]',
-          '.title'
+          'h1, h2, h3, h4, h5, h6',
+          '[class*="category"]', '[class*="section"]', '[class*="heading"]',
+          '[class*="menu-section"]', '.title', '.section-title',
+          '[role="heading"]', '[aria-label*="section"]'
         ];
 
+        const categories = new Set();
         document.querySelectorAll(categorySelectors.join(',')).forEach(element => {
           const text = element.textContent?.trim();
-          if (text && text.length > 2 && text.length < 100) {
-            results.categories.push(text);
+          if (text && text.length > 2 && text.length < 100 && 
+              !text.match(/[$£€¥₹][\d,]+\.?\d*/) && // Not a price
+              !text.toLowerCase().includes('copyright')) {
+            categories.add(text);
           }
         });
 
-        // Get raw text for fallback analysis
-        results.rawText = document.body.innerText?.substring(0, 5000) || '';
+        results.categories = Array.from(categories).slice(0, 25);
+        results.rawText = document.body.innerText?.substring(0, 8000) || '';
 
         return results;
       });
 
-      // Post-process and validate
-      menuData.menuItems = menuData.menuItems
-        .filter(item => item.name && item.name.length > 2)
-        .slice(0, 100); // Reasonable limit
+      // Post-process and validate (already done in new system)
+      const uniqueCategories = [...new Set(menuData.categories)].slice(0, 25);
+      menuData.categories = uniqueCategories;
 
-      menuData.categories = [...new Set(menuData.categories)]
-        .slice(0, 20); // Reasonable limit
-
-      console.log(`📊 Extracted ${menuData.menuItems.length} items, ${menuData.categories.length} categories`);
+      console.log(`🚀 ADVANCED EXTRACTION: ${menuData.menuItems.length} items, ${menuData.categories.length} categories`);
+      console.log(`📊 Best strategy: ${menuData.extractionStrategy} (confidence: ${menuData.confidence}%)`);
+      
+      if (menuData.menuItems.length > 0) {
+        console.log(`✅ Sample items: ${menuData.menuItems.slice(0, 3).map(item => `"${item.name}" (${item.strategy})`).join(', ')}`);
+      }
       
       return menuData;
 
