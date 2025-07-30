@@ -2346,32 +2346,32 @@ Return ONLY JSON:
       const enhancedHtml = this.prepareEnhancedHtmlForGemini(htmlContent);
       const textContent = this.htmlToText(htmlContent);
       
-      const prompt = `Find menu links on this restaurant website.
+      const prompt = `Find ALL possible menu links on this restaurant website. Be comprehensive and find as many menu-related links as possible.
 
 Website URL: ${url}
 
 HTML Content:
 ${enhancedHtml}
 
-IMPORTANT: Prioritize navigation bar elements first! Navigation bars are the most likely place for menu links.
+Find ANY links, buttons, or clickable elements that could lead to the restaurant's menu. Look for:
 
-Find any links, buttons, or clickable elements that lead to the restaurant's menu. Look for:
-
-PRIORITY 1 - NAVIGATION ELEMENTS:
+HIGH PRIORITY (give 80-95% confidence):
 - Links in navigation bars, headers, main menus
 - Primary site navigation containing "menu", "food", "order", "dining"
-- Top-level navigation items (usually most reliable)
+- Top-level navigation items
 
-PRIORITY 2 - OTHER ELEMENTS:
-- Text containing "menu", "food", "order", "dining", "takeout", "delivery"
-- PDF menu links
+ALSO INCLUDE (give 60-85% confidence):
+- Text containing "menu", "food", "order", "dining", "takeout", "delivery", "eat", "dine"
+- PDF menu links anywhere on the page
 - Call-to-action buttons for ordering/menus
 - Secondary navigation elements
+- Footer menu links
+- Sidebar menu links
+- Any clickable element that mentions food/dining
 
-Give higher confidence scores (80-95%) to links found in navigation elements.
-Give lower confidence scores (60-80%) to links found elsewhere on the page.
+Be INCLUSIVE - include any link that could possibly be menu-related. It's better to include too many than miss important menu links.
 
-Return a JSON object:
+Return a JSON object with ALL discovered menu links:
 {
   "menuUrls": [
     {
@@ -2379,6 +2379,12 @@ Return a JSON object:
       "confidence": 90,
       "reason": "Found in main navigation bar",
       "type": "navigation"
+    },
+    {
+      "url": "full URL", 
+      "confidence": 75,
+      "reason": "Menu link in footer",
+      "type": "secondary"
     }
   ]
 }`;
@@ -2591,7 +2597,7 @@ Return ONLY a JSON object:
     const topUlElements = cleaned.match(topUlPattern) || [];
     navigationElements.push(...topUlElements);
     
-    // PRIORITY 2: OTHER IMPORTANT ELEMENTS
+    // PRIORITY 2: ALL OTHER CONTENT (be comprehensive)
     const otherElements = [];
     
     // Get ALL links (after navigation priority)
@@ -2604,10 +2610,30 @@ Return ONLY a JSON object:
     const allButtons = cleaned.match(buttonPattern) || [];
     otherElements.push(...allButtons);
     
-    // Get clickable divs that contain "menu" text
-    const menuDivPattern = /<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi;
+    // Get clickable divs that contain menu-related text (expanded)
+    const menuDivPattern = /<div[^>]*>[\s\S]*?(?:[Mm][Ee][Nn][Uu]|[Ff][Oo][Oo][Dd]|[Oo][Rr][Dd][Ee][Rr]|[Dd][Ii][Nn][Ee])[\s\S]*?<\/div>/gi;
     const menuDivs = cleaned.match(menuDivPattern) || [];
     otherElements.push(...menuDivs);
+    
+    // Get footer sections (often contain menu links)
+    const footerPattern = /<footer[^>]*>[\s\S]*?<\/footer>/gi;
+    const footerSections = cleaned.match(footerPattern) || [];
+    otherElements.push(...footerSections);
+    
+    // Get aside/sidebar sections
+    const asidePattern = /<aside[^>]*>[\s\S]*?<\/aside>/gi;
+    const asideSections = cleaned.match(asidePattern) || [];
+    otherElements.push(...asideSections);
+    
+    // Get main content areas
+    const mainPattern = /<main[^>]*>[\s\S]*?<\/main>/gi;
+    const mainSections = cleaned.match(mainPattern) || [];
+    otherElements.push(...mainSections);
+    
+    // Get any element with food/menu-related classes
+    const foodClassPattern = /<[^>]*(?:class|id)="[^"]*(?:food|eat|dine|order|takeout|delivery)[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi;
+    const foodClassElements = cleaned.match(foodClassPattern) || [];
+    otherElements.push(...foodClassElements);
     
     // Combine with NAVIGATION FIRST for AI priority
     const uniqueNavElements = [...new Set(navigationElements)];
@@ -2618,15 +2644,28 @@ Return ONLY a JSON object:
     if (uniqueNavElements.length > 0) {
       result += '<!-- PRIORITY: NAVIGATION ELEMENTS -->\n';
       result += uniqueNavElements.join('\n\n') + '\n\n';
-      console.log(`🧭 Prioritizing ${uniqueNavElements.length} navigation elements for AI analysis`);
+      console.log(`🧭 Prioritizing ${uniqueNavElements.length} navigation elements for AI analysis (${uniqueOtherElements.length} other elements also included)`);
     }
     
-    // Add other elements if space allows
-    const remainingSpace = 25000 - result.length;
-    if (remainingSpace > 1000 && uniqueOtherElements.length > 0) {
+    // ALWAYS include other elements - don't let navigation prioritization reduce total content
+    if (uniqueOtherElements.length > 0) {
       result += '<!-- OTHER PAGE ELEMENTS -->\n';
       const otherContent = uniqueOtherElements.join('\n\n');
-      result += otherContent.substring(0, remainingSpace - 200);
+      
+      // Calculate remaining space, but be more generous
+      const remainingSpace = 25000 - result.length;
+      if (remainingSpace > 500) {
+        result += otherContent.substring(0, remainingSpace - 100);
+      } else {
+        // If navigation elements took too much space, trim them and include other content
+        const navContent = uniqueNavElements.join('\n\n');
+        const halfSpace = 12000; // Split space more evenly
+        
+        result = '<!-- PRIORITY: NAVIGATION ELEMENTS -->\n';
+        result += navContent.substring(0, halfSpace) + '\n\n';
+        result += '<!-- OTHER PAGE ELEMENTS -->\n';
+        result += otherContent.substring(0, halfSpace);
+      }
     }
     
     if (result.length >= 25000) {
