@@ -467,62 +467,120 @@ class PlaywrightScraper {
       if (subMenuLinks && subMenuLinks.length > 0) {
         console.log(`📁 Found ${subMenuLinks.length} potential sub-menu links`);
         
-        // Step 3: Process each sub-menu link
-        for (const subMenuLink of subMenuLinks) {
-          if (visitedUrls.has(subMenuLink.url)) {
-            console.log(`⏭️ Skipping already visited URL: ${subMenuLink.url}`);
-            continue;
-          }
+        // Step 3: PARALLEL processing of sub-menu links! 🚀
+        // Use workers if available, otherwise parallel promises
+        if (global.scrapingPool?.executeParallel) {
+          console.log(`🏭 PARALLEL sub-menu processing with ${global.scrapingPool.workers.length} workers for ${subMenuLinks.length} sub-menus`);
           
-          console.log(`📄 Scraping sub-menu: ${subMenuLink.url} (${subMenuLink.category || 'Unknown Category'})`);
+          // Filter out already visited URLs
+          const urlsToProcess = subMenuLinks.filter(link => !visitedUrls.has(link.url));
           
-          try {
-            // Use enhanced scraping that can detect if this page actually contains menu items
-            const subMenuResult = await this.scrapeMenuDataWithMenuDetection(subMenuLink.url, { 
-              ...options, 
-              skipDiscovery: true,
-              expectedCategory: subMenuLink.category 
+          if (urlsToProcess.length > 0) {
+            const parallelResults = await global.scrapingPool.executeParallel(urlsToProcess, {
+              ...options,
+              skipDiscovery: true
             });
             
-            if (subMenuResult.success && subMenuResult.menuItems && subMenuResult.menuItems.length > 0) {
-              // Check if this page actually contains menu items (not just navigation)
-              if (subMenuResult.isActualMenu && subMenuResult.menuConfidence > 60) {
-                console.log(`✅ Sub-menu contains actual items: ${subMenuResult.menuItems.length} items from ${subMenuLink.category || 'Unknown'} (confidence: ${subMenuResult.menuConfidence}%)`);
+            // Process worker results
+            for (const subResult of parallelResults) {
+              if (subResult.success && subResult.data && subResult.data.menuItems) {
+                if (subResult.data.isActualMenu && subResult.data.menuConfidence > 60) {
+                  console.log(`✅ Worker sub-menu contains actual items: ${subResult.data.menuItems.length} items from ${subResult.category || 'Unknown'} (confidence: ${subResult.data.menuConfidence}%)`);
+                } else {
+                  console.log(`📝 Worker sub-menu is likely navigation page: ${subResult.data.menuItems.length} extracted items (confidence: ${subResult.data.menuConfidence}%)`);
+                }
+                
+                const categorizedItems = subResult.data.menuItems.map(item => ({
+                  ...item,
+                  subMenuCategory: subResult.category || 'Menu',
+                  sourceUrl: subResult.url,
+                  isFromActualMenu: subResult.data.isActualMenu,
+                  menuConfidence: subResult.data.menuConfidence,
+                  processedByWorker: true
+                }));
+                
+                allMenuItems.push(...categorizedItems);
+                allCategories.push(...(subResult.data.categories || []));
+                if (subResult.category) {
+                  allCategories.push(subResult.category);
+                }
+                
+                subMenuUrls.push({
+                  url: subResult.url,
+                  category: subResult.category,
+                  itemCount: subResult.data.menuItems.length,
+                  processedByWorker: true
+                });
+                
+                visitedUrls.add(subResult.url);
               } else {
-                console.log(`📝 Sub-menu is likely navigation page: ${subMenuResult.menuItems.length} extracted items (confidence: ${subMenuResult.menuConfidence}%)`);
+                console.log(`⚠️ Worker sub-menu returned no items: ${subResult.url}`);
               }
-              
-              // Add category context to items if available
-              const categorizedItems = subMenuResult.menuItems.map(item => ({
-                ...item,
-                subMenuCategory: subMenuLink.category || 'Menu',
-                sourceUrl: subMenuLink.url,
-                isFromActualMenu: subMenuResult.isActualMenu,
-                menuConfidence: subMenuResult.menuConfidence
-              }));
-              
-              allMenuItems.push(...categorizedItems);
-              allCategories.push(...(subMenuResult.categories || []));
-              if (subMenuLink.category) {
-                allCategories.push(subMenuLink.category);
-              }
-              
-              subMenuUrls.push({
-                url: subMenuLink.url,
-                category: subMenuLink.category,
-                itemCount: subMenuResult.menuItems.length
-              });
-              
-              visitedUrls.add(subMenuLink.url);
-            } else {
-              console.log(`⚠️ Sub-menu returned no items: ${subMenuLink.url}`);
             }
-          } catch (error) {
-            console.log(`❌ Error scraping sub-menu ${subMenuLink.url}: ${error.message}`);
           }
+        } else {
+          // FALLBACK: Parallel promises if no worker pool
+          console.log(`💫 PARALLEL sub-menu processing with promises for ${subMenuLinks.length} sub-menus`);
           
-          // Small delay between sub-menu requests to be polite
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          const subMenuPromises = subMenuLinks
+            .filter(link => !visitedUrls.has(link.url))
+            .map(async (subMenuLink) => {
+              try {
+                console.log(`📄 Scraping sub-menu: ${subMenuLink.url} (${subMenuLink.category || 'Unknown Category'})`);
+                const subMenuResult = await this.scrapeMenuDataWithMenuDetection(subMenuLink.url, { 
+                  ...options, 
+                  skipDiscovery: true,
+                  expectedCategory: subMenuLink.category 
+                });
+                return { link: subMenuLink, result: subMenuResult };
+              } catch (error) {
+                console.error(`❌ Error scraping sub-menu ${subMenuLink.url}: ${error.message}`);
+                return { link: subMenuLink, result: null, error };
+              }
+            });
+          
+          const subMenuResults = await Promise.allSettled(subMenuPromises);
+          
+          // Process parallel promise results
+          for (const promiseResult of subMenuResults) {
+            if (promiseResult.status === 'fulfilled' && promiseResult.value.result) {
+              const { link: subMenuLink, result: subMenuResult } = promiseResult.value;
+              
+              if (subMenuResult.success && subMenuResult.menuItems && subMenuResult.menuItems.length > 0) {
+                if (subMenuResult.isActualMenu && subMenuResult.menuConfidence > 60) {
+                  console.log(`✅ Parallel sub-menu contains actual items: ${subMenuResult.menuItems.length} items from ${subMenuLink.category || 'Unknown'} (confidence: ${subMenuResult.menuConfidence}%)`);
+                } else {
+                  console.log(`📝 Parallel sub-menu is likely navigation page: ${subMenuResult.menuItems.length} extracted items (confidence: ${subMenuResult.menuConfidence}%)`);
+                }
+                
+                const categorizedItems = subMenuResult.menuItems.map(item => ({
+                  ...item,
+                  subMenuCategory: subMenuLink.category || 'Menu',
+                  sourceUrl: subMenuLink.url,
+                  isFromActualMenu: subMenuResult.isActualMenu,
+                  menuConfidence: subMenuResult.menuConfidence,
+                  processedByParallel: true
+                }));
+                
+                allMenuItems.push(...categorizedItems);
+                allCategories.push(...(subMenuResult.categories || []));
+                if (subMenuLink.category) {
+                  allCategories.push(subMenuLink.category);
+                }
+                
+                subMenuUrls.push({
+                  url: subMenuLink.url,
+                  category: subMenuLink.category,
+                  itemCount: subMenuResult.menuItems.length,
+                  processedByParallel: true
+                });
+                
+                visitedUrls.add(subMenuLink.url);
+              } else {
+                console.log(`⚠️ Parallel sub-menu returned no items: ${subMenuLink.url}`);
+              }
+            }
+          }
         }
       } else {
         console.log(`📋 No sub-menu links found, using main menu only`);
@@ -1616,60 +1674,92 @@ Return ONLY JSON:
       const menuSearchResult = await this.findMenuWithContextualAI(htmlContent, currentUrl, apiKey);
       
       if (menuSearchResult && menuSearchResult.menuUrls && menuSearchResult.menuUrls.length > 0) {
-        // Try each suggested URL in order of confidence
+        // OPTIMIZATION: Process AI-discovered URLs in parallel instead of sequentially! 🚀
+        console.log(`[AI Search] ⚡ PARALLEL testing ${menuSearchResult.menuUrls.length} AI-discovered URLs...`);
+        
+        // Quick check for high-confidence PDFs first (no network call needed)
         for (const suggestion of menuSearchResult.menuUrls) {
-          console.log(`[AI Search] Testing suggested URL: ${suggestion.url} (confidence: ${suggestion.confidence}%, type: ${suggestion.type})`);
-          console.log(`[AI Search] Reason: ${suggestion.reason}`);
-          
-          // Skip if already visited
-          if (visitedUrls.has(suggestion.url)) {
-            console.log(`[AI Search] Already visited: ${suggestion.url}`);
-            continue;
-          }
-          
-          // Handle PDF links differently - don't try to fetch HTML content
-          if (suggestion.type === 'pdf' || suggestion.url.toLowerCase().endsWith('.pdf')) {
-            console.log(`[AI Search] Found PDF menu link: ${suggestion.url}`);
-            console.log(`[AI Search] PDF menus require special handling - returning PDF URL for processing`);
-            
-            // For high-confidence PDF menus, return the URL directly
-            if (suggestion.confidence > 70) {
-              console.log(`[AI Search] ✓ High-confidence PDF menu found: ${suggestion.url}`);
-              return suggestion.url;
-            } else {
-              console.log(`[AI Search] Low-confidence PDF, continuing to look for HTML alternatives...`);
-              continue;
-            }
-          }
-          
-          // For HTML pages, check if the URL exists and is accessible
-          const testContent = await this.fetchPageContentForAI(suggestion.url, options);
-          if (testContent) {
-            // Check if this is a menu page for HTML content
-            console.log(`[AI Search] Testing if ${suggestion.url} is a menu page...`);
-            const isMenuResult = await this.checkIfPageIsMenuWithAI(testContent, suggestion.url, apiKey);
-            
-            if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 40) {
-              console.log(`[AI Search] ✓ Confirmed dedicated menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%)`);
-              return suggestion.url;
-            } else if (isMenuResult) {
-              console.log(`[AI Search] ✗ Not a menu page: ${suggestion.url} (confidence: ${isMenuResult.confidence}%, reason: ${isMenuResult.reason})`);
-              
-              // If this was a high-confidence suggestion that turned out not to be a menu,
-              // and we haven't hit max depth, try to recursively search from this page
-              if (suggestion.confidence > 70 && depth < 2) {
-                console.log(`[AI Search] High-confidence suggestion failed, trying recursive search from: ${suggestion.url}`);
-                const recursiveResult = await this.findMenuPageWithAI(suggestion.url, depth + 1, visitedUrls, options);
-                if (recursiveResult) {
-                  console.log(`[AI Search] Found menu through recursive search: ${recursiveResult}`);
-                  return recursiveResult;
-                }
-              }
-            }
-          } else {
-            console.log(`[AI Search] ✗ URL not accessible: ${suggestion.url}`);
+          if ((suggestion.type === 'pdf' || suggestion.url.toLowerCase().endsWith('.pdf')) && suggestion.confidence > 80) {
+            console.log(`[AI Search] ✓ High-confidence PDF menu found: ${suggestion.url} (confidence: ${suggestion.confidence}%)`);
+            return suggestion.url;
           }
         }
+        
+        // Filter out already visited URLs and PDFs for parallel processing
+        const urlsToTest = menuSearchResult.menuUrls.filter(suggestion => {
+          if (visitedUrls.has(suggestion.url)) {
+            console.log(`[AI Search] Skipping already visited: ${suggestion.url}`);
+            return false;
+          }
+          // Don't include PDFs in parallel testing (handled above)
+          if (suggestion.type === 'pdf' || suggestion.url.toLowerCase().endsWith('.pdf')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (urlsToTest.length > 0) {
+          // PARALLEL CONTENT FETCHING: Use workers if available, otherwise parallel promises
+          let contentResults = [];
+          if (global.scrapingPool?.executeContentFetches) {
+            console.log(`[AI Search] 🏭 Using worker pool for ${urlsToTest.length} URLs`);
+            const workerResults = await global.scrapingPool.executeContentFetches(
+              urlsToTest.map(s => s.url), 
+              { ...options, timeout: 8000 }
+            );
+            contentResults = workerResults.map((result, index) => ({
+              url: urlsToTest[index].url,
+              suggestion: urlsToTest[index],
+              content: result.success ? result.content : null,
+              success: result.success
+            }));
+          } else {
+            console.log(`[AI Search] 💫 Using parallel promises for ${urlsToTest.length} URLs`);
+            const contentPromises = urlsToTest.map(async (suggestion) => {
+              try {
+                const content = await this.fetchPageContentForAI(suggestion.url, { ...options, timeout: 8000 });
+                return { url: suggestion.url, suggestion, content, success: !!content };
+              } catch (error) {
+                return { url: suggestion.url, suggestion, content: null, success: false };
+              }
+            });
+            contentResults = await Promise.allSettled(contentPromises);
+            contentResults = contentResults.map(result => 
+              result.status === 'fulfilled' ? result.value : { success: false }
+            ).filter(r => r.success);
+          }
+          
+          // PARALLEL AI VALIDATION: Process successful fetches in parallel
+          const validationPromises = contentResults
+            .filter(result => result.success && result.content)
+            .map(async (result) => {
+              try {
+                console.log(`[AI Search] 🤖 AI validating: ${result.url} (confidence: ${result.suggestion.confidence}%)`);
+                const isMenuResult = await this.checkIfPageIsMenuWithAI(result.content, result.url, apiKey);
+                return { ...result, isMenuResult };
+              } catch (error) {
+                console.warn(`[AI Search] Validation error for ${result.url}: ${error.message}`);
+                return { ...result, isMenuResult: null };
+              }
+            });
+          
+          const validationResults = await Promise.allSettled(validationPromises);
+          
+          // Find the best menu page from parallel results
+          for (const result of validationResults) {
+            if (result.status === 'fulfilled') {
+              const { isMenuResult, url, suggestion } = result.value;
+              if (isMenuResult && isMenuResult.isMenu && isMenuResult.confidence > 75) {
+                console.log(`[AI Search] ✅ PARALLEL discovery success: ${url} (AI confidence: ${isMenuResult.confidence}%, original: ${suggestion.confidence}%)`);
+                console.log(`[AI Search] Reason: ${isMenuResult.reason}`);
+                return url;
+              }
+            }
+          }
+          
+          console.log(`[AI Search] ❌ No valid menu pages found in parallel testing of ${urlsToTest.length} URLs`);
+        }
+        
       } else {
         console.log(`[AI Search] Enhanced AI Search found no menu URLs for: ${currentUrl}`);
         
