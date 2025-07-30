@@ -41,3 +41,4 @@ natural-metric-*.json
 *.tsbuildinfo
 
 app-example
+eas.json
