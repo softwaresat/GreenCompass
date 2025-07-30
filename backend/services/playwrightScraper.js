@@ -2353,10 +2353,23 @@ Website URL: ${url}
 HTML Content:
 ${enhancedHtml}
 
+IMPORTANT: Prioritize navigation bar elements first! Navigation bars are the most likely place for menu links.
+
 Find any links, buttons, or clickable elements that lead to the restaurant's menu. Look for:
-- Text containing "menu", "food", "order"
-- PDF menu links  
-- Navigation links to menu pages
+
+PRIORITY 1 - NAVIGATION ELEMENTS:
+- Links in navigation bars, headers, main menus
+- Primary site navigation containing "menu", "food", "order", "dining"
+- Top-level navigation items (usually most reliable)
+
+PRIORITY 2 - OTHER ELEMENTS:
+- Text containing "menu", "food", "order", "dining", "takeout", "delivery"
+- PDF menu links
+- Call-to-action buttons for ordering/menus
+- Secondary navigation elements
+
+Give higher confidence scores (80-95%) to links found in navigation elements.
+Give lower confidence scores (60-80%) to links found elsewhere on the page.
 
 Return a JSON object:
 {
@@ -2364,13 +2377,13 @@ Return a JSON object:
     {
       "url": "full URL",
       "confidence": 90,
-      "reason": "Found menu button",
-      "type": "direct"
+      "reason": "Found in main navigation bar",
+      "type": "navigation"
     }
   ]
 }`;
 
-      console.log(`[Enhanced AI Search] Analyzing page structure for: ${url}`);
+      console.log(`[Enhanced AI Search] 🧭 Analyzing page structure with NAVIGATION PRIORITY for: ${url}`);
       
       const result = await callGeminiAPI(prompt, apiKey, 'enhanced menu search');
       
@@ -2416,7 +2429,10 @@ Return a JSON object:
         console.log(`[Enhanced AI Search] Found ${parsedResult.menuUrls?.length || 0} potential menu URLs`);
         if (parsedResult.menuUrls && parsedResult.menuUrls.length > 0) {
           parsedResult.menuUrls.forEach((menuUrl, index) => {
-            console.log(`[Enhanced AI Search] URL ${index + 1}: ${menuUrl.url} (confidence: ${menuUrl.confidence}%, reason: ${menuUrl.reason})`);
+            const isNavigation = menuUrl.type === 'navigation' || menuUrl.reason?.toLowerCase().includes('navigation') || menuUrl.reason?.toLowerCase().includes('nav');
+            const navIcon = isNavigation ? '🧭 ' : '';
+            const priorityTag = isNavigation ? ' [NAV PRIORITY]' : '';
+            console.log(`[Enhanced AI Search] ${navIcon}URL ${index + 1}: ${menuUrl.url} (confidence: ${menuUrl.confidence}%, reason: ${menuUrl.reason})${priorityTag}`);
           });
         }
         
@@ -2547,39 +2563,74 @@ Return ONLY a JSON object:
     cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
     cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
     
-    const importantElements = [];
+    // PRIORITY 1: NAVIGATION ELEMENTS (Most likely to contain menu links) 🚀
+    const navigationElements = [];
     
-    // Get ALL links first - simplified
-    const linkPattern = /<a[^>]*>[\s\S]*?<\/a>/gi;
-    const allLinks = cleaned.match(linkPattern) || [];
-    importantElements.push(...allLinks);
-    
-    // Get ALL buttons - simplified
-    const buttonPattern = /<button[^>]*>[\s\S]*?<\/button>/gi;
-    const allButtons = cleaned.match(buttonPattern) || [];
-    importantElements.push(...allButtons);
-    
-    // Get clickable divs that contain "menu" text - very simple approach
-    const menuDivPattern = /<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi;
-    const menuDivs = cleaned.match(menuDivPattern) || [];
-    importantElements.push(...menuDivs);
-    
-    // Get navigation sections
+    // Primary navigation sections
     const navPattern = /<nav[^>]*>[\s\S]*?<\/nav>/gi;
     const navSections = cleaned.match(navPattern) || [];
-    importantElements.push(...navSections);
+    navigationElements.push(...navSections);
     
-    // Get header sections  
+    // Header sections (often contain main navigation)
     const headerPattern = /<header[^>]*>[\s\S]*?<\/header>/gi;
     const headerSections = cleaned.match(headerPattern) || [];
-    importantElements.push(...headerSections);
+    navigationElements.push(...headerSections);
     
-    // Remove duplicates and combine
-    const uniqueElements = [...new Set(importantElements)];
-    let result = uniqueElements.join('\n\n').substring(0, 25000);
+    // Elements with navigation-related classes/IDs
+    const navClassPattern = /<[^>]*(?:class|id)="[^"]*(?:nav|menu|header|topbar|main-menu|primary-menu|site-nav)[^"]*"[^>]*>[\s\S]*?<\/[^>]+>/gi;
+    const navClassElements = cleaned.match(navClassPattern) || [];
+    navigationElements.push(...navClassElements);
+    
+    // Elements with navigation-related roles
+    const navRolePattern = /<[^>]*role="(?:navigation|menubar|banner)"[^>]*>[\s\S]*?<\/[^>]+>/gi;
+    const navRoleElements = cleaned.match(navRolePattern) || [];
+    navigationElements.push(...navRoleElements);
+    
+    // Top-level ul elements (often used for main navigation)
+    const topUlPattern = /<ul[^>]*(?:class|id)="[^"]*(?:nav|menu|main)[^"]*"[^>]*>[\s\S]*?<\/ul>/gi;
+    const topUlElements = cleaned.match(topUlPattern) || [];
+    navigationElements.push(...topUlElements);
+    
+    // PRIORITY 2: OTHER IMPORTANT ELEMENTS
+    const otherElements = [];
+    
+    // Get ALL links (after navigation priority)
+    const linkPattern = /<a[^>]*>[\s\S]*?<\/a>/gi;
+    const allLinks = cleaned.match(linkPattern) || [];
+    otherElements.push(...allLinks);
+    
+    // Get ALL buttons
+    const buttonPattern = /<button[^>]*>[\s\S]*?<\/button>/gi;
+    const allButtons = cleaned.match(buttonPattern) || [];
+    otherElements.push(...allButtons);
+    
+    // Get clickable divs that contain "menu" text
+    const menuDivPattern = /<div[^>]*>[\s\S]*?[Mm][Ee][Nn][Uu][\s\S]*?<\/div>/gi;
+    const menuDivs = cleaned.match(menuDivPattern) || [];
+    otherElements.push(...menuDivs);
+    
+    // Combine with NAVIGATION FIRST for AI priority
+    const uniqueNavElements = [...new Set(navigationElements)];
+    const uniqueOtherElements = [...new Set(otherElements)];
+    
+    // Navigation elements get priority in content sent to AI
+    let result = '';
+    if (uniqueNavElements.length > 0) {
+      result += '<!-- PRIORITY: NAVIGATION ELEMENTS -->\n';
+      result += uniqueNavElements.join('\n\n') + '\n\n';
+      console.log(`🧭 Prioritizing ${uniqueNavElements.length} navigation elements for AI analysis`);
+    }
+    
+    // Add other elements if space allows
+    const remainingSpace = 25000 - result.length;
+    if (remainingSpace > 1000 && uniqueOtherElements.length > 0) {
+      result += '<!-- OTHER PAGE ELEMENTS -->\n';
+      const otherContent = uniqueOtherElements.join('\n\n');
+      result += otherContent.substring(0, remainingSpace - 200);
+    }
     
     if (result.length >= 25000) {
-      result += '\n...[Content truncated for AI analysis]';
+      result = result.substring(0, 25000) + '\n...[Content truncated for AI analysis]';
     }
     
     return result;
