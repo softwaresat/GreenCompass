@@ -166,6 +166,18 @@ class PlaywrightScraper {
   async findAndScrapeMenu(url, options = {}) {
     console.log(`🔍 Starting AI-powered intelligent menu discovery for: ${url}`);
     
+    // Initialize browser pool in background (non-blocking)
+    try {
+      if (!this.browserPool.isInitialized) {
+        console.log(`🏭 Initializing browser pool in background...`);
+        this.browserPool.init().catch(error => {
+          console.warn(`⚠️ Browser pool initialization failed: ${error.message}`);
+        });
+      }
+    } catch (error) {
+      console.warn(`⚠️ Browser pool initialization error: ${error.message}`);
+    }
+    
     // Check if this is a PDF URL first - PDFs should be handled differently
     if (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf')) {
       console.log(`📄 Detected PDF URL, delegating to PDF parser: ${url}`);
