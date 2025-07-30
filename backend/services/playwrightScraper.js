@@ -765,6 +765,60 @@ Return maximum 10 sub-menu links, highest confidence first!`;
   }
 
   /**
+   * Set up optimized browser context with resource blocking for faster page loads
+   * @param {Object} browser - Playwright browser instance
+   * @param {Object} options - Context options
+   * @returns {Promise<Object>} Optimized browser context
+   */
+  async createOptimizedContext(browser, options = {}) {
+    const context = await browser.newContext({
+      viewport: options.mobile ? { width: 375, height: 667 } : { width: 1920, height: 1080 },
+      userAgent: options.mobile ? 
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1' :
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      ...options
+    });
+
+    // OPTIMIZATION: Smart resource blocking for faster loading while preserving AI context! 🚀
+    await context.route('**/*', (route) => {
+      const resourceType = route.request().resourceType();
+      const url = route.request().url();
+      
+      // Block large images and media files (photos, videos) - these slow down loading but don't help AI
+      if (resourceType === 'image' && (
+        url.includes('.jpg') || url.includes('.jpeg') || url.includes('.png') || 
+        url.includes('.gif') || url.includes('.webp') || url.includes('.svg')
+      )) {
+        route.abort();
+      }
+      // Block large media files (videos, audio)
+      else if (resourceType === 'media') {
+        route.abort();
+      }
+      // Block tracking and analytics scripts (but allow menu-related scripts)
+      else if (resourceType === 'script' && (
+        url.includes('google-analytics') || 
+        url.includes('googletagmanager') ||
+        url.includes('facebook.net') ||
+        url.includes('hotjar') ||
+        url.includes('mixpanel') ||
+        url.includes('segment.com') ||
+        url.includes('google.com/recaptcha') ||
+        url.includes('doubleclick.net')
+      )) {
+        route.abort();
+      }
+      else {
+        // ALLOW: Stylesheets (help AI understand layout), fonts (help AI understand hierarchy), 
+        // menu-related scripts, documents, xhr, fetch requests
+        route.continue();
+      }
+    });
+
+    return context;
+  }
+
+  /**
    * Basic sub-menu link detection without AI
    * @param {string} menuPageUrl - Menu page URL
    * @param {Object} options - Scraping options
@@ -776,12 +830,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
     
     try {
       await this.initBrowser();
-      context = await this.browser.newContext({
-        viewport: options.mobile ? { width: 375, height: 667 } : { width: 1920, height: 1080 },
-        userAgent: options.mobile ? 
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1' :
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-      });
+      context = await this.createOptimizedContext(this.browser, { mobile: options.mobile });
       
       page = await context.newPage();
       await page.goto(menuPageUrl, { 
@@ -952,12 +1001,7 @@ Return maximum 10 sub-menu links, highest confidence first!`;
     
     try {
       await this.initBrowser();
-      context = await this.browser.newContext({
-        viewport: options.mobile ? { width: 375, height: 667 } : { width: 1920, height: 1080 },
-        userAgent: options.mobile ? 
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1' :
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-      });
+      context = await this.createOptimizedContext(this.browser, { mobile: options.mobile });
       
       page = await context.newPage();
       await page.goto(url, { 
@@ -1052,26 +1096,11 @@ Return maximum 10 sub-menu links, highest confidence first!`;
 
     try {
       const browser = await this.initBrowser();
-      context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        viewport: options.mobile ? 
-          { width: 375, height: 667 } : 
-          { width: 1280, height: 800 }
-      });
+      context = await this.createOptimizedContext(browser, { mobile: options.mobile });
       
       page = await context.newPage();
       page.setDefaultTimeout(30000); // Reduced to 30 seconds
       page.setDefaultNavigationTimeout(30000); // Reduced to 30 seconds
-      
-      // Block heavy media content
-      await page.route('**/*', (route) => {
-        const resourceType = route.request().resourceType();
-        if (['image', 'media', 'font'].includes(resourceType)) {
-          route.abort();
-        } else {
-          route.continue();
-        }
-      });
       
       console.log(`🌐 Navigating to: ${url}`);
       await page.goto(url, {
@@ -1275,12 +1304,7 @@ Return ONLY JSON:
 
     try {
       const browser = await this.initBrowser();
-      context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        viewport: options.mobile ? 
-          { width: 375, height: 667 } : 
-          { width: 1280, height: 800 }
-      });
+      context = await this.createOptimizedContext(browser, { mobile: options.mobile });
       
       page = await context.newPage();
       
